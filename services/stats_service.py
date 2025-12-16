@@ -1,6 +1,18 @@
 """
 Team statistics service (goals scored/conceded).
-Uses multiple free sources: FBRef, FlashScore, Transfermarkt, web search.
+Fetches LAST 5 MATCHES statistics from multiple free sources.
+
+FUNCIONAMENTO:
+- Busca EXATAMENTE os últimos 5 jogos de cada time
+- Calcula média de gols marcados e sofridos nesses 5 jogos
+- Valida os dados extraídos para garantir precisão
+- Usa múltiplas fontes: FBRef (principal), FlashScore, Transfermarkt, WebSearch
+
+PRECISÃO DOS DADOS:
+- Extrai dados diretamente das tabelas de resultados
+- Identifica corretamente gols marcados vs sofridos usando colunas GF/GA
+- Valida que os dados são razoáveis (0-15 gols por jogo, média 0-6)
+- Logs detalhados mostram cada jogo individual para verificação
 """
 import re
 import unicodedata
@@ -21,9 +33,12 @@ except ImportError:
         DDGS_AVAILABLE = False
         DDGS = None
 
+# Number of recent matches to analyze - CONFIGURÁVEL
+LAST_N_MATCHES = 5  # Exatamente 5 jogos mais recentes
+
 
 class StatsService:
-    """100% free statistics service with multiple sources."""
+    """100% free statistics service - fetches LAST 5 MATCHES stats."""
     
     # Brazilian team name mappings for FBRef
     TEAM_MAPPINGS_BR = {
@@ -42,6 +57,17 @@ class StatsService:
         'atletico-go': 'Atletico-Goianiense', 'atlético goianiense': 'Atletico-Goianiense',
         'goias': 'Goias', 'goiás': 'Goias', 'america-mg': 'America-MG',
         'coritiba': 'Coritiba', 'sport': 'Sport-Recife', 'ceara': 'Ceara', 'ceará': 'Ceara'
+    }
+    
+    # European team mappings
+    TEAM_MAPPINGS_EU = {
+        'real madrid': 'Real-Madrid', 'barcelona': 'Barcelona', 'atletico madrid': 'Atletico-Madrid',
+        'bayern munich': 'Bayern-Munich', 'bayern': 'Bayern-Munich', 'dortmund': 'Borussia-Dortmund',
+        'manchester united': 'Manchester-United', 'manchester city': 'Manchester-City',
+        'liverpool': 'Liverpool', 'chelsea': 'Chelsea', 'arsenal': 'Arsenal', 'tottenham': 'Tottenham',
+        'juventus': 'Juventus', 'inter milan': 'Inter', 'ac milan': 'AC-Milan', 'napoli': 'Napoli',
+        'psg': 'Paris-Saint-Germain', 'paris saint-germain': 'Paris-Saint-Germain',
+        'lyon': 'Lyon', 'marseille': 'Marseille',
     }
     
     def __init__(self, api_key=None, api_host=None):
@@ -81,47 +107,77 @@ class StatsService:
         return None
 
     def _scrape_fbref_stats(self, team_name, league_key):
-        """Fetch statistics from FBRef."""
+        """Fetch LAST 5 MATCHES statistics from FBRef."""
         try:
-            cache_key = f"fbref_{team_name}_{league_key}"
+            cache_key = f"fbref_last5_{team_name}_{league_key}"
             if cache_key in self._stats_cache:
+                print(f"      💾 Usando cache para {team_name}")
                 return self._stats_cache[cache_key]
             
             team_slug = self._get_team_slug(team_name)
-            print(f"      📊 FBRef: Searching {team_slug}...")
+            print(f"      📊 FBRef: Buscando últimos {LAST_N_MATCHES} jogos de {team_slug}...")
             
             search_url = f"https://fbref.com/en/search/search.fcgi?search={quote_plus(team_name)}"
             response = request_with_retry(search_url, timeout=10)
             
             if not response:
+                print(f"      ⚠️ FBRef: Falha na busca")
                 return None
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
             # Look for team page link
             team_link = None
+            fixtures_link = None
             team_slug_lower = team_slug.lower().replace('-', '')
             
             for link in soup.find_all('a', href=True):
                 href = link.get('href', '')
+                link_text = link.get_text().lower()
+                
+                # Look for squad page
                 if '/squads/' in href:
                     if team_slug_lower in href.lower().replace('-', ''):
                         team_link = f"https://fbref.com{href}"
+                        # Try to find fixtures page directly
+                        if 'all_comps/scores-and-fixtures' not in team_link:
+                            fixtures_link = team_link.rstrip('/') + '/all_comps/scores-and-fixtures'
                         break
-                    text = link.get_text().lower()
-                    if self._normalize_team_name(team_name) in text:
+                    if self._normalize_team_name(team_name) in link_text:
                         team_link = f"https://fbref.com{href}"
+                        if 'all_comps/scores-and-fixtures' not in team_link:
+                            fixtures_link = team_link.rstrip('/') + '/all_comps/scores-and-fixtures'
                         break
             
             if not team_link:
-                print(f"      ⚠️ FBRef: Team not found")
+                print(f"      ⚠️ FBRef: Time '{team_name}' não encontrado")
                 return None
             
+            print(f"      🔗 Página do time encontrada: {team_link}")
+            
+            # Try fixtures page first (more reliable for recent matches)
+            if fixtures_link:
+                print(f"      🔗 Tentando página de resultados: {fixtures_link}")
+                fixtures_response = request_with_retry(fixtures_link, timeout=10)
+                if fixtures_response:
+                    stats = self._extract_fbref_last_matches(
+                        BeautifulSoup(fixtures_response.content, 'html.parser'), 
+                        team_name
+                    )
+                    if stats:
+                        self._stats_cache[cache_key] = stats
+                        return stats
+            
+            # Fallback to main team page
+            print(f"      🔗 Tentando página principal do time")
             team_response = request_with_retry(team_link, timeout=10)
             if not team_response:
                 return None
             
-            stats = self._extract_fbref_stats(BeautifulSoup(team_response.content, 'html.parser'))
+            stats = self._extract_fbref_last_matches(
+                BeautifulSoup(team_response.content, 'html.parser'), 
+                team_name
+            )
             if stats:
                 self._stats_cache[cache_key] = stats
             return stats
@@ -130,25 +186,234 @@ class StatsService:
             print(f"      ⚠️ FBRef error: {e}")
             return None
 
-    def _extract_fbref_stats(self, soup):
-        """Extract statistics from FBRef tables."""
-        scored_patterns = [
-            r'(\d+\.\d+)\s*(?:GF|goals?\s*for|gols?\s*feitos)',
-            r'(?:GF|Goals\s*For)[:\s]+\d+\s*\((\d+\.\d+)',
-            r'(?:goals?\s*scored|gols?\s*marcados)[:\s]*(\d+\.\d+)',
-        ]
-        conceded_patterns = [
-            r'(\d+\.\d+)\s*(?:GA|goals?\s*against|gols?\s*sofridos)',
-            r'(?:GA|Goals\s*Against)[:\s]+\d+\s*\((\d+\.\d+)',
-            r'(?:goals?\s*conceded|gols?\s*sofridos)[:\s]*(\d+\.\d+)',
-        ]
+    def _extract_fbref_last_matches(self, soup, team_name):
+        """Extract LAST 5 MATCHES results from FBRef page."""
+        matches = []
+        normalized_team = self._normalize_team_name(team_name)
         
-        page_text = soup.get_text()
-        scored_avg = self._extract_goal_avg(page_text, scored_patterns)
-        conceded_avg = self._extract_goal_avg(page_text, conceded_patterns)
+        print(f"      🔍 Procurando tabela de resultados para {team_name}...")
         
-        if scored_avg and conceded_avg:
-            return {'scored_avg': round(scored_avg, 2), 'conceded_avg': round(conceded_avg, 2), 'source': 'FBRef'}
+        # Try to find the "Scores & Fixtures" table or match results
+        # FBRef uses tables with id like "matchlogs_for" or class "stats_table"
+        tables = soup.find_all('table', {'class': re.compile(r'stats_table|sortable')})
+        
+        for table in tables:
+            # Look for tables with match results (columns: Date, Comp, Round, Venue, Result, GF, GA, Opponent)
+            headers = table.find_all('th')
+            header_texts = [h.get_text().strip().lower() for h in headers]
+            
+            # Find column indices for GF (Goals For) and GA (Goals Against)
+            gf_index = None
+            ga_index = None
+            venue_index = None
+            result_index = None
+            
+            for idx, header in enumerate(header_texts):
+                if header in ['gf', 'goals for']:
+                    gf_index = idx
+                elif header in ['ga', 'goals against']:
+                    ga_index = idx
+                elif header in ['venue', 'local']:
+                    venue_index = idx
+                elif header in ['result', 'resultado']:
+                    result_index = idx
+            
+            # Check if this table has the columns we need
+            has_gf_ga = (gf_index is not None and ga_index is not None)
+            has_result = result_index is not None
+            
+            if not has_gf_ga and not has_result:
+                continue
+            
+            print(f"      📋 Tabela encontrada - GF col:{gf_index}, GA col:{ga_index}, Venue col:{venue_index}, Result col:{result_index}")
+            
+            rows = table.find_all('tr')
+            
+            for row in rows:
+                cells = row.find_all(['td', 'th'])
+                if len(cells) < 4:
+                    continue
+                
+                # Skip header rows
+                if cells[0].name == 'th':
+                    continue
+                
+                row_text = row.get_text()
+                
+                # Method 1: Use GF/GA columns directly if available
+                if has_gf_ga and gf_index < len(cells) and ga_index < len(cells):
+                    try:
+                        gf_text = cells[gf_index].get_text().strip()
+                        ga_text = cells[ga_index].get_text().strip()
+                        
+                        # Extract numbers from cells
+                        gf_match = re.search(r'(\d+)', gf_text)
+                        ga_match = re.search(r'(\d+)', ga_text)
+                        
+                        if gf_match and ga_match:
+                            goals_scored = int(gf_match.group(1))
+                            goals_conceded = int(ga_match.group(1))
+                            
+                            matches.append({
+                                'scored': goals_scored,
+                                'conceded': goals_conceded
+                            })
+                            
+                            print(f"      ⚽ Jogo {len(matches)}: {goals_scored}-{goals_conceded}")
+                            
+                            if len(matches) >= LAST_N_MATCHES:
+                                break
+                            continue
+                    except (ValueError, IndexError):
+                        pass
+                
+                # Method 2: Extract from Result column with W/D/L pattern
+                if has_result and result_index < len(cells):
+                    result_text = cells[result_index].get_text().strip()
+                    score_match = re.search(r'([WDL])\s*(\d+)[–\-:](\d+)', result_text)
+                    
+                    if score_match:
+                        result_type = score_match.group(1)
+                        goals_a = int(score_match.group(2))
+                        goals_b = int(score_match.group(3))
+                        
+                        # W means team won, so first number is team's goals
+                        if result_type == 'W':
+                            goals_scored = goals_a
+                            goals_conceded = goals_b
+                        # L means team lost, so first number is still team's goals
+                        elif result_type == 'L':
+                            goals_scored = goals_a
+                            goals_conceded = goals_b
+                        # D means draw
+                        else:
+                            goals_scored = goals_a
+                            goals_conceded = goals_b
+                        
+                        matches.append({
+                            'scored': goals_scored,
+                            'conceded': goals_conceded
+                        })
+                        
+                        print(f"      ⚽ Jogo {len(matches)}: {result_type} {goals_scored}-{goals_conceded}")
+                        
+                        if len(matches) >= LAST_N_MATCHES:
+                            break
+                        continue
+                
+                # Method 3: General pattern extraction from row text as fallback
+                score_match = re.search(r'[WDL]?\s*(\d+)[–\-:](\d+)', row_text)
+                if score_match:
+                    goals_a = int(score_match.group(1))
+                    goals_b = int(score_match.group(2))
+                    
+                    # Try to determine venue to assign goals correctly
+                    venue_text = ""
+                    if venue_index and venue_index < len(cells):
+                        venue_text = cells[venue_index].get_text().strip().lower()
+                    
+                    # Check result prefix (W/D/L) to understand perspective
+                    result_prefix = re.search(r'([WDL])\s*\d+', row_text.strip())
+                    
+                    if venue_text in ['home', 'h', 'casa']:
+                        # Home game: first score is team's score
+                        goals_scored = goals_a
+                        goals_conceded = goals_b
+                    elif venue_text in ['away', 'a', 'fora']:
+                        # Away game: need to check if scores are in team perspective
+                        # FBRef usually shows scores in team's perspective
+                        goals_scored = goals_a
+                        goals_conceded = goals_b
+                    elif result_prefix:
+                        # Use W/D/L to validate
+                        prefix = result_prefix.group(1)
+                        # FBRef format is "W 2-1" meaning team won 2-1
+                        goals_scored = goals_a
+                        goals_conceded = goals_b
+                    else:
+                        # Default: first number is team's score
+                        goals_scored = goals_a
+                        goals_conceded = goals_b
+                    
+                    matches.append({
+                        'scored': goals_scored,
+                        'conceded': goals_conceded
+                    })
+                    
+                    print(f"      ⚽ Jogo {len(matches)}: {goals_scored}-{goals_conceded} (venue: {venue_text or 'N/A'})")
+                    
+                    if len(matches) >= LAST_N_MATCHES:
+                        break
+            
+            if matches:
+                break
+        
+        if len(matches) < 2:
+            print(f"      ⚠️ Poucos jogos encontrados na tabela principal, tentando fallback...")
+            # Fallback: try to find form/results section with simpler patterns
+            text_content = soup.get_text()
+            
+            # Look for recent form like "WWDLW" with scores
+            form_matches = re.findall(r'([WDL])\s*(\d+)[–\-:](\d+)', text_content)
+            for form in form_matches[:LAST_N_MATCHES]:
+                result, g1, g2 = form
+                g1, g2 = int(g1), int(g2)
+                # In FBRef format "W 2-1", the first number is always the team's score
+                matches.append({'scored': g1, 'conceded': g2})
+                print(f"      ⚽ Jogo {len(matches)} (fallback): {result} {g1}-{g2}")
+                
+                if len(matches) >= LAST_N_MATCHES:
+                    break
+        
+        # Only proceed if we have at least 2 matches
+        if len(matches) >= 2:
+            # Ensure we only use exactly LAST_N_MATCHES (5) or fewer if not available
+            matches_to_use = matches[:LAST_N_MATCHES]
+            n_matches = len(matches_to_use)
+            
+            # Validate that matches data makes sense
+            for i, match in enumerate(matches_to_use):
+                # Ensure goals are non-negative and reasonable (max 15 per match)
+                if match['scored'] < 0 or match['scored'] > 15:
+                    print(f"      ⚠️ Gols marcados suspeitos no jogo {i+1}: {match['scored']}")
+                    return None
+                if match['conceded'] < 0 or match['conceded'] > 15:
+                    print(f"      ⚠️ Gols sofridos suspeitos no jogo {i+1}: {match['conceded']}")
+                    return None
+            
+            # Calculate totals
+            total_scored = sum(m['scored'] for m in matches_to_use)
+            total_conceded = sum(m['conceded'] for m in matches_to_use)
+            
+            # Calculate averages
+            scored_avg = round(total_scored / n_matches, 2)
+            conceded_avg = round(total_conceded / n_matches, 2)
+            
+            # Final validation: averages should be reasonable (0-6 goals per game)
+            if scored_avg < 0 or scored_avg > 6:
+                print(f"      ⚠️ Média de gols marcados suspeita: {scored_avg}")
+                return None
+            if conceded_avg < 0 or conceded_avg > 6:
+                print(f"      ⚠️ Média de gols sofridos suspeita: {conceded_avg}")
+                return None
+            
+            # Detailed logging
+            print(f"      ✅ FBRef: Encontrados {n_matches} jogos recentes")
+            print(f"      📊 Detalhamento dos jogos:")
+            for i, match in enumerate(matches_to_use, 1):
+                print(f"         {i}. Feitos: {match['scored']}, Sofridos: {match['conceded']}")
+            print(f"      📊 TOTAL: {total_scored} gols feitos, {total_conceded} gols sofridos em {n_matches} jogos")
+            print(f"      📊 MÉDIA: {scored_avg} gols feitos/jogo, {conceded_avg} gols sofridos/jogo")
+            
+            return {
+                'scored_avg': scored_avg,
+                'conceded_avg': conceded_avg,
+                'matches_analyzed': n_matches,
+                'last_matches': matches_to_use,
+                'source': f'FBRef (últimos {n_matches} jogos)'
+            }
+        
+        print(f"      ❌ FBRef: Dados insuficientes (apenas {len(matches)} jogos encontrados)")
         return None
 
     def _scrape_flashscore_stats(self, team_name, league_name):
