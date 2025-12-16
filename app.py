@@ -3,17 +3,26 @@ import os
 import pandas as pd
 import json 
 from datetime import datetime
+from pathlib import Path
 from dotenv import load_dotenv
 
-# Importação dos módulos
-from services import OddsService, AIService, NewsService
+# Carrega o .env antes de qualquer outra coisa
+# Tenta múltiplos caminhos possíveis para o arquivo .env
+base_path = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+env_path = base_path / '.env'
+if not env_path.exists():
+    # Tenta o diretório atual de trabalho
+    env_path = Path.cwd() / '.env'
+load_dotenv(dotenv_path=env_path, override=True)
+
+# Importação dos serviços (modularizado)
+from services import OddsService, AIService, NewsService, StatsService
 from math_engine import PoissonEngine
 from models import engine, Match, Prediction, init_db
 from sqlalchemy.orm import sessionmaker
 
 # --- CONFIGURAÇÃO ---
 st.set_page_config(page_title="Sniper Pro: Elite Betting", page_icon="🎯", layout="wide")
-load_dotenv()
 
 # CSS Customizado
 st.markdown("""
@@ -26,10 +35,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_KEY = os.getenv("GEMINI_KEY")
 
 if not ODDS_API_KEY or not GEMINI_KEY:
     st.error("❌ Chaves de API ausentes no arquivo .env")
+    st.error(f"Verifique se o arquivo .env existe em: {env_path}")
     st.stop()
 
 # Conexão com Banco
@@ -128,10 +138,11 @@ def main():
             OddsService(ODDS_API_KEY),
             AIService(GEMINI_KEY),
             NewsService(),
-            PoissonEngine(league_avg_goals=1.35)
+            PoissonEngine(league_avg_goals=1.35),
+            StatsService()  # 100% gratuito - não precisa de chaves
         )
 
-    odds_service, ai_service, news_service, math_engine = load_services()
+    odds_service, ai_service, news_service, math_engine, stats_service = load_services()
 
     # --- SIDEBAR ---
     with st.sidebar:
@@ -153,13 +164,28 @@ def main():
         liga_selecionada = st.selectbox("Campeonato:", opcoes_ligas, format_func=lambda x: x[1])
         
         if st.button("🔄 Escanear Oportunidades", type="primary"):
-            with st.spinner(f"Buscando jogos..."):
+            with st.spinner(f"Buscando jogos do {liga_selecionada[1]}..."):
                 matches = odds_service.get_upcoming_matches(liga_selecionada[0])
-                if matches and isinstance(matches, list) and len(matches) > 0 and "error" not in matches[0]:
-                    st.session_state['matches_data'] = matches
-                    st.success(f"✅ {len(matches)} jogos encontrados.")
+                
+                # Verifica se retornou um erro
+                if isinstance(matches, dict) and "error" in matches:
+                    st.error(f"❌ Erro: {matches['error']}")
+                    st.session_state['matches_data'] = []
+                elif matches and isinstance(matches, list) and len(matches) > 0:
+                    # Verifica se o primeiro item não é um erro
+                    if isinstance(matches[0], dict) and "error" not in matches[0]:
+                        st.session_state['matches_data'] = matches
+                        st.success(f"✅ {len(matches)} jogos encontrados para {liga_selecionada[1]}.")
+                    else:
+                        st.warning("⚠️ API retornou dados inválidos.")
+                        st.session_state['matches_data'] = []
                 else:
-                    st.warning("Nenhum jogo encontrado.")
+                    # Lista vazia significa que a API funcionou mas não há jogos disponíveis
+                    st.warning(f"⚠️ Nenhum jogo encontrado para {liga_selecionada[1]} no momento.")
+                    st.info("💡 Isso pode significar:\n"
+                           "• Não há jogos agendados neste campeonato no momento\n"
+                           "• Os jogos podem não estar disponíveis em todas as regiões da API\n"
+                           "• Tente outro campeonato ou verifique mais tarde")
                     st.session_state['matches_data'] = []
 
     # --- CORPO PRINCIPAL ---
@@ -177,6 +203,15 @@ def main():
             if selected_match_name:
                 match_data = match_options[selected_match_name]
                 
+                # Limpa estatísticas anteriores se mudou de jogo
+                current_match_key = f"{match_data['home_team']}_{match_data['away_team']}"
+                if 'last_match_key' not in st.session_state or st.session_state['last_match_key'] != current_match_key:
+                    st.session_state.pop('home_scored', None)
+                    st.session_state.pop('home_conceded', None)
+                    st.session_state.pop('away_scored', None)
+                    st.session_state.pop('away_conceded', None)
+                    st.session_state['last_match_key'] = current_match_key
+                
                 odds = {}
                 for book in match_data.get('bookmakers', []):
                     if book['key'] == 'bet365' or True: 
@@ -188,21 +223,64 @@ def main():
                     st.stop()
 
                 st.markdown("---")
+                
+                # Botão para buscar estatísticas automaticamente
+                col_btn, _ = st.columns([1, 3])
+                with col_btn:
+                    if st.button("📊 Buscar Estatísticas Automaticamente", type="secondary", use_container_width=True):
+                        with st.spinner("Buscando estatísticas dos times..."):
+                            # Busca estatísticas do time da casa
+                            home_stats = stats_service.get_team_stats(
+                                match_data['home_team'], 
+                                liga_selecionada[0],
+                                liga_selecionada[1]
+                            )
+                            
+                            # Busca estatísticas do time visitante
+                            away_stats = stats_service.get_team_stats(
+                                match_data['away_team'],
+                                liga_selecionada[0],
+                                liga_selecionada[1]
+                            )
+                            
+                            # Armazena no session_state para preencher os campos
+                            if home_stats:
+                                st.session_state['home_scored'] = home_stats['scored_avg']
+                                st.session_state['home_conceded'] = home_stats['conceded_avg']
+                                st.success(f"✅ Estatísticas de {match_data['home_team']} encontradas!")
+                            else:
+                                st.warning(f"⚠️ Não foi possível buscar estatísticas de {match_data['home_team']}")
+                            
+                            if away_stats:
+                                st.session_state['away_scored'] = away_stats['scored_avg']
+                                st.session_state['away_conceded'] = away_stats['conceded_avg']
+                                st.success(f"✅ Estatísticas de {match_data['away_team']} encontradas!")
+                            else:
+                                st.warning(f"⚠️ Não foi possível buscar estatísticas de {match_data['away_team']}")
+                
                 col1, col2 = st.columns(2)
                 
                 with col1:
                     st.subheader(f"🏠 {match_data['home_team']}")
                     odd_h = odds.get(match_data['home_team'], 0)
                     st.metric("Odd Atual", f"{odd_h:.2f}")
-                    h_s = st.number_input("Gols Feitos (Casa)", 0.0, 5.0, 1.45, step=0.1, key="hs")
-                    h_c = st.number_input("Gols Sofridos (Casa)", 0.0, 5.0, 0.95, step=0.1, key="hc")
+                    
+                    # Usa valores do session_state se existirem, senão usa valores padrão
+                    default_h_s = st.session_state.get('home_scored', 1.45)
+                    default_h_c = st.session_state.get('home_conceded', 0.95)
+                    h_s = st.number_input("Gols Feitos (Casa)", 0.0, 5.0, default_h_s, step=0.1, key="hs")
+                    h_c = st.number_input("Gols Sofridos (Casa)", 0.0, 5.0, default_h_c, step=0.1, key="hc")
 
                 with col2:
                     st.subheader(f"✈️ {match_data['away_team']}")
                     odd_a = odds.get(match_data['away_team'], 0)
                     st.metric("Odd Atual", f"{odd_a:.2f}")
-                    a_s = st.number_input("Gols Feitos (Fora)", 0.0, 5.0, 1.15, step=0.1, key="as")
-                    a_c = st.number_input("Gols Sofridos (Fora)", 0.0, 5.0, 1.35, step=0.1, key="ac")
+                    
+                    # Usa valores do session_state se existirem, senão usa valores padrão
+                    default_a_s = st.session_state.get('away_scored', 1.15)
+                    default_a_c = st.session_state.get('away_conceded', 1.35)
+                    a_s = st.number_input("Gols Feitos (Fora)", 0.0, 5.0, default_a_s, step=0.1, key="as")
+                    a_c = st.number_input("Gols Sofridos (Fora)", 0.0, 5.0, default_a_c, step=0.1, key="ac")
 
                 st.markdown("---")
                 if st.button("🚀 EXECUTAR SNIPER ANALYSIS", type="primary", use_container_width=True):
