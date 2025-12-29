@@ -17,8 +17,8 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 # Importação dos serviços (modularizado)
 from services import OddsService, AIService, NewsService, StatsService
-from math_engine import PoissonEngine
-from models import engine, Match, Prediction, init_db
+from utils.math_engine import PoissonEngine
+from models.models import engine, Match, Prediction, init_db
 from sqlalchemy.orm import sessionmaker
 
 # --- CONFIGURAÇÃO ---
@@ -35,7 +35,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-GEMINI_KEY = os.getenv("GEMINI_KEY")
+GEMINI_KEY = os.getenv("GEMINI_KEY") 
 
 if not ODDS_API_KEY or not GEMINI_KEY:
     st.error("❌ Chaves de API ausentes no arquivo .env")

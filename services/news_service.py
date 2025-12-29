@@ -6,7 +6,7 @@ import unicodedata
 import warnings
 
 from bs4 import BeautifulSoup
-from webscraper import scrape_page_content
+from services.webscraper import scrape_page_content
 
 # Suppress DuckDuckGo warnings
 warnings.filterwarnings("ignore", module="duckduckgo_search")
