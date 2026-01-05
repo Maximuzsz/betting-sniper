@@ -1,9 +1,10 @@
 """
 AI service for context analysis using Google Gemini.
-Implements model rotation to avoid 429 errors.
+Implements model rotation, JSON validation, and structured output.
 """
 import json
 import re
+import datetime
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
@@ -17,9 +18,8 @@ class AIService:
             HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
+        # Lista de prioridade (Modelos mais novos e rápidos primeiro)
         self.models_priority = [
-            'gemini-2.5-flash-preview-09-2025',
-            'gemini-2.5-flash',
             'gemini-2.0-flash-exp', 
             'gemini-1.5-flash', 
             'gemini-1.5-flash-latest',
@@ -33,58 +33,63 @@ class AIService:
         """Get the current working model, rotating if needed."""
         if self.current_model_index >= len(self.models_priority):
             self.current_model_index = 0
+        
         model_name = self.models_priority[self.current_model_index]
+        
         if not self.active_model:
             self.active_model = genai.GenerativeModel(model_name, safety_settings=self.safety_settings)
+            
         return self.active_model
 
     def analyze_context(self, match_info, math_probs, news_context):
         """
         Analyze match context using AI.
-        
-        Args:
-            match_info: Match data with home_team and away_team
-            math_probs: Mathematical probabilities from Poisson
-            news_context: News and lineup information
-        
-        Returns:
-            dict with analysis, deltas, and trends
         """
-        if "Nenhuma notícia" in news_context or "não disponível" in news_context.lower() or "apenas estatísticas" in news_context.lower():
-            news_context = "Sem dados recentes disponíveis. Assuma base titular e risco neutro."
+        # 1. Validação de Entrada
+        if not news_context or len(news_context) < 10 or "Nenhuma notícia" in news_context:
+            news_context = "Sem dados específicos recentes. Assuma base titular e risco neutro."
 
+        # Injeta a data atual para a IA entender o tempo verbal das notícias
+        current_date = datetime.datetime.now().strftime("%d/%m/%Y")
+
+        # 2. Prompt Engenharia (Refinado)
         prompt = f"""
         Você é um Trader Esportivo Profissional (Sniper).
+        Hoje é: {current_date}.
         
         OBJETIVO:
-        Analise o CONTEÚDO EXTRAÍDO de sites esportivos abaixo.
+        Analise as notícias abaixo para determinar o impacto QUALITATIVO no jogo.
         
         DADOS DO JOGO:
-        Confronto: {match_info.get('home_team')} x {match_info.get('away_team')}
-        Probabilidade Matemática: Casa {math_probs['home_win']:.1%} | Visitante {math_probs['away_win']:.1%}
+        Confronto: {match_info.get('home_team')} (Casa) x {match_info.get('away_team')} (Visitante)
+        Probabilidade Matemática (Poisson): Casa {math_probs['home_win']:.1%} | Visitante {math_probs['away_win']:.1%}
         
-        NOTÍCIAS (LEIA TUDO):
+        NOTÍCIAS EXTRAÍDAS:
         \"\"\"
         {news_context}
         \"\"\"
         
-        TAREFA:
-        1. Identifique a "Provável Escalação" no texto.
-           - Se citar "time misto", "reservas" ou "poupar", penalize o time fortemente.
-           - Se citar "força máxima", bonifique levemente.
-        2. Liste os DESFALQUES confirmados (Lesão, Suspensão).
-        3. Ignore informações de "Mercado da Bola".
+        REGRAS DE ANÁLISE:
+        1. Escalação: "Time misto", "reservas", "poupar" = PENALIDADE GRAVE.
+        2. Desfalques: Ausência de goleiro titular ou artilheiro = PENALIDADE MÉDIA.
+        3. Motivação: "Cumprir tabela", "foco em outra competição" = PENALIDADE LEVE/MÉDIA.
+        4. Mercado: Ignore notícias sobre transferências futuras (2025/2026).
         
-        Retorne um JSON com esta estrutura exata:
+        FORMATO DE SAÍDA (JSON):
         {{
-            "analise_textual": "Texto resumo (máx 300 chars)",
-            "delta_home": 0.0,
+            "analise_textual": "Resumo de 1 frase (ex: 'Palmeiras poupa titulares focado na Libertadores').",
+            "delta_home": 0.0,  // Ajuste decimal (Ex: -0.15 para perda grave, +0.05 para reforço)
             "delta_away": 0.0,
-            "tendencia_gols": "Neutra",
-            "tendencia_btts": "Duvidoso",
-            "risco_critico": false
+            "tendencia_gols": "Alta", // Alta (Over), Neutra, Baixa (Under)
+            "tendencia_btts": "Sim",  // Sim, Não, Duvidoso
+            "risco_critico": false    // True se houver time reserva ou crise grave
         }}
         """
+        
+        # 3. Configuração para forçar JSON (funciona nos modelos 1.5+)
+        generation_config = {
+            "response_mime_type": "application/json"
+        }
         
         last_error = ""
         max_attempts = min(3, len(self.models_priority))
@@ -92,45 +97,42 @@ class AIService:
         for attempt in range(max_attempts): 
             model = self._get_working_model()
             model_name = self.models_priority[self.current_model_index]
+            
             try:
-                print(f"🤖 Trying model: {model_name} (attempt {attempt + 1}/{max_attempts})")
-                resp = model.generate_content(
-                    prompt,
-                    generation_config={"response_mime_type": "application/json"}
-                )
+                # print(f"🤖 AI Analysis ({model_name})...")
+                resp = model.generate_content(prompt, generation_config=generation_config)
                 
+                # Tenta parsear JSON direto
                 try:
                     result = json.loads(resp.text)
-                    print(f"✅ Analysis completed successfully using {model_name}")
+                    # Validação básica
+                    if "delta_home" not in result: 
+                        raise ValueError("JSON incompleto")
                     return result
-                except json.JSONDecodeError as je:
-                    json_match = re.search(r'\{[^}]+\}', resp.text)
+                except (json.JSONDecodeError, ValueError):
+                    # Fallback com Regex robusto (com suporte a quebra de linha \s\S)
+                    # O regex antigo \{[^}]+\} falhava com JSONs aninhados
+                    json_match = re.search(r'\{[\s\S]*\}', resp.text)
                     if json_match:
-                        try:
-                            return json.loads(json_match.group())
-                        except:
-                            pass
-                    last_error = f"Invalid JSON: {str(je)}"
-                    continue
+                        return json.loads(json_match.group())
+                    raise ValueError("Não foi possível extrair JSON da resposta")
                     
             except Exception as e:
-                error_str = str(e)
-                print(f"⚠️ Error in model {model_name}: {error_str[:200]}")
-                last_error = error_str
+                error_str = str(e).lower()
+                # print(f"⚠️ Erro AI ({model_name}): {error_str}")
+                last_error = str(e)
                 
-                if any(code in error_str for code in ["429", "404", "403"]) or any(word in error_str.lower() for word in ["quota", "not found", "permission"]):
+                # Se for erro de cota ou modelo não encontrado, troca imediatamente
+                if any(x in error_str for x in ["429", "404", "quota", "not found", "resource"]):
                     self.current_model_index += 1
                     self.active_model = None
-                    if self.current_model_index >= len(self.models_priority):
-                        self.current_model_index = 0
                 else:
-                    if attempt < max_attempts - 1:
-                        continue
-                    break
+                    # Outros erros (conteúdo bloqueado, etc), tenta mais uma vez ou sai
+                    if attempt == max_attempts - 1: break
                     
-        print(f"❌ Failed to process AI analysis after {max_attempts} attempts")
+        # Fallback Final Seguro
         return {
-            "analise_textual": f"Limited analysis - error: {last_error[:100] if last_error else 'Unknown error'}. Using mathematical data.", 
+            "analise_textual": f"Erro na IA: {last_error[:50]}... Usando base matemática.", 
             "delta_home": 0.0, 
             "delta_away": 0.0, 
             "tendencia_gols": "Neutra", 

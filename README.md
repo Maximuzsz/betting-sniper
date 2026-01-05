@@ -1,36 +1,73 @@
-# Betting Sniper
+🧠 Como Funciona a Análise do Sniper Pro
 
-Streamlit application for sports betting analysis using mathematical models and AI.
+O sistema utiliza uma arquitetura de Inteligência Híbrida para encontrar valor (+EV) no mercado de apostas desportivas.
 
-## Installation
+O Fluxo de Decisão (Pipeline)
 
-```bash
-pip install -r requirements.txt
-```
+graph TD
+    A[Utilizador Seleciona o Jogo] --> B{Início da Análise};
+    
+    subgraph "Camada 1: Coleta de Dados (Paralelo)"
+        B --> C[📊 Stats Service];
+        B --> D[📰 News Service];
+        B --> E[💰 Odds Service];
+        
+        C -->|Busca OGol/FBRef| C1[Médias de Gols Recentes];
+        D -->|Busca Google/GE| D1[Notícias de Escalação e Lesões];
+        E -->|API Externa| E1[Odds Atuais da Casa];
+    end
 
-## Configuration
+    subgraph "Camada 2: Processamento"
+        C1 --> F[🧮 Math Engine];
+        F -->|Cálculo Poisson| F1[Probabilidade Estatística Pura];
+        
+        D1 --> G[🤖 AI Service];
+        F1 -.-> G;
+        G -->|Analisa Contexto| G1[Delta de Ajuste IA];
+        G -->|Analisa Risco| G2[Tendência de Gols/BTTS];
+    end
 
-Create a `.env` file in the project root:
+    subgraph "Camada 3: Decisão (O Sniper)"
+        F1 & G1 --> H[Cálculo da Probabilidade Real];
+        H --> I[Comparação com Odds (EV)];
+        I --> J{Existe Valor?};
+        
+        J -->|Sim (+EV)| K[✅ Sugestão de Aposta (Critério de Kelly)];
+        J -->|Não (-EV)| L[🚫 Alerta: Sem Valor / Não Apostar];
+    end
 
-```
-ODDS_API_KEY="your_key"
-GEMINI_KEY="your_key"
-POSTGRES_USER="admin"
-POSTGRES_PASSWORD="admin123"
-POSTGRES_DB="sniper_db"
-POSTGRES_HOST="localhost"
-POSTGRES_PORT="5432"
-```
 
-## Running
 
-```bash
-streamlit run app.py
-```
+Detalhe dos Componentes
 
-## Features
+1. Motor Matemático (Quantitative)
 
-- Automatic statistics fetching (free)
-- Mathematical analysis with Poisson distribution
-- AI analysis (Google Gemini)
-- Bankroll management (Kelly Criterion)
+Baseado na Distribuição de Poisson. Assume que o desempenho passado recente (ataque vs defesa) prediz o futuro imediato.
+
+Entrada: Média de Gols Feitos/Sofridos (Casa e Fora).
+
+Saída: Probabilidade base (ex: Home 50%, Draw 30%, Away 20%).
+
+2. Analista IA (Qualitative)
+
+Utiliza LLM (Gemini) para interpretar dados não estruturados que a matemática ignora.
+
+Fontes: Lê matérias de "Pré-jogo", "Provável Escalação" e "Desfalques".
+
+Lógica:
+
+Time Titular? Mantém ou bonifica levemente.
+
+Time Misto/Reserva? Penaliza drasticamente (-10% a -20%).
+
+Desfalque de Craque? Penaliza moderadamente.
+
+Must Win (Precisa ganhar)? Bonifica a motivação.
+
+3. Gestão de Banca (Money Management)
+
+Não basta saber em quem apostar, é preciso saber quanto.
+
+Fórmula: Critério de Kelly Fracionário.
+
+Objetivo: Crescer a banca exponencialmente quando a vantagem é alta, e proteger o capital quando a vantagem é marginal.
