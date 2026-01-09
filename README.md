@@ -1,6 +1,6 @@
 🧠 Como Funciona a Análise do Sniper Pro
 
-O sistema utiliza uma arquitetura de Inteligência Híbrida para encontrar valor (+EV) no mercado de apostas desportivas.
+O sistema utiliza uma arquitetura de Inteligência Híbrida para encontrar valor (+EV) no mercado de apostas desportivas, com gestão automática de capital.
 
 O Fluxo de Decisão (Pipeline)
 
@@ -36,6 +36,12 @@ graph TD
         J -->|Não (-EV)| L[🚫 Alerta: Sem Valor / Não Apostar];
     end
 
+    subgraph "Camada 4: Execução & Controle"
+        K --> M[💾 Registrar Aposta];
+        M --> N[📉 Atualização de Banca];
+        N -->|Green| O[Soma Lucro];
+        N -->|Red| P[Subtrai Stake];
+    end
 
 
 Detalhe dos Componentes
@@ -64,10 +70,18 @@ Desfalque de Craque? Penaliza moderadamente.
 
 Must Win (Precisa ganhar)? Bonifica a motivação.
 
-3. Gestão de Banca (Money Management)
+3. Gestão de Banca & Registro (Money Management)
 
-Não basta saber em quem apostar, é preciso saber quanto.
+Não basta saber em quem apostar, é preciso saber quanto e acompanhar a evolução.
 
-Fórmula: Critério de Kelly Fracionário.
+Fórmula: Critério de Kelly Fracionário para definir o valor da entrada (Stake).
 
-Objetivo: Crescer a banca exponencialmente quando a vantagem é alta, e proteger o capital quando a vantagem é marginal.
+Registro de Entrada: O sistema salva o valor exato apostado (R$) junto com a análise no banco de dados.
+
+Atualização Automática (Pós-Jogo):
+
+Win (Green): Nova Banca = Banca Atual + (Valor Entrada × (Odd - 1))
+
+Loss (Red): Nova Banca = Banca Atual - Valor Entrada
+
+Objetivo: Crescer a banca exponencialmente com gestão de risco e manter um histórico auditável de lucratividade.

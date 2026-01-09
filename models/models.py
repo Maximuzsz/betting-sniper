@@ -1,6 +1,6 @@
 import os
 import urllib.parse
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text, inspect, text
 from sqlalchemy.types import JSON
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from datetime import datetime
@@ -11,44 +11,19 @@ load_dotenv()
 
 # --- LÓGICA DE CONEXÃO ROBUSTA ---
 def get_database_url():
-    # 1. Tenta pegar a URL completa (NeonDB/Render)
     url = os.getenv("DATABASE_URL")
-    
-    # 2. Se não existir, tenta montar a local (Docker/Localhost)
     if not url:
-        db_user = os.getenv("POSTGRES_USER", "admin")
-        db_pass = os.getenv("POSTGRES_PASSWORD", "admin123")
-        db_name = os.getenv("POSTGRES_DB", "sniper_db")
-        db_host = os.getenv("POSTGRES_HOST", "localhost")
-        db_port = os.getenv("POSTGRES_PORT", "5432")
+        db_user, db_pass, db_name, db_host, db_port = "admin", "admin123", "sniper_db", "localhost", "5432"
         url = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
-    
-    # Correção de compatibilidade (postgres:// -> postgresql://)
-    if url and url.startswith("postgres://"):
+    if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
-        
     return url
 
 DATABASE_URL = get_database_url()
 
-# Log de Conexão (Mascarando senha para segurança)
-if DATABASE_URL:
-    try:
-        parsed_url = urllib.parse.urlparse(DATABASE_URL)
-        masked_netloc = f"{parsed_url.username}:******@{parsed_url.hostname}:{parsed_url.port}"
-        print(f"🔌 Conectando ao Banco de Dados: {masked_netloc}/{parsed_url.path.lstrip('/')}")
-    except:
-        print("🔌 Conectando ao Banco de Dados (URL mascarada)...")
-
-# Configuração da Engine
 try:
-    connect_args = {}
-    # NeonDB exige SSL
-    if "neon.tech" in DATABASE_URL or "sslmode" in DATABASE_URL:
-        connect_args = {"sslmode": "require"}
-
-    engine = create_engine(DATABASE_URL, connect_args=connect_args)
-    
+    connect_args = {"sslmode": "require"} if "neon.tech" in DATABASE_URL or "sslmode" in DATABASE_URL else {}
+    engine = create_engine(DATABASE_URL, connect_args=connect_args) if DATABASE_URL else create_engine("sqlite:///sniper.db")
 except Exception as e:
     print(f"❌ Erro na configuração da Engine: {e}")
     raise e
@@ -57,9 +32,29 @@ Base = declarative_base()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # --- MODELOS ---
+
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    kelly_fraction = Column(Float, default=0.1, nullable=False)
+    
+    wallet = relationship("Wallet", back_populates="user", uselist=False)
+    predictions = relationship("Prediction", back_populates="user")
+
+class Wallet(Base):
+    """Tabela para gerenciar a Banca (Saldo) de um usuário."""
+    __tablename__ = 'wallet'
+    id = Column(Integer, primary_key=True, index=True)
+    balance = Column(Float, default=1000.0)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    
+    user = relationship("User", back_populates="wallet")
+
 class Match(Base):
     __tablename__ = 'matches'
-    
     id = Column(Integer, primary_key=True, index=True)
     external_id = Column(String, unique=True, nullable=True)
     league_key = Column(String)
@@ -71,50 +66,73 @@ class Match(Base):
 
 class Prediction(Base):
     __tablename__ = 'predictions'
-    
     id = Column(Integer, primary_key=True, index=True)
     match_id = Column(Integer, ForeignKey('matches.id'))
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Inputs
+    # ... (demais campos)
     input_home_goals_avg = Column(Float)
     input_home_conceded_avg = Column(Float)
     input_away_goals_avg = Column(Float)
     input_away_conceded_avg = Column(Float)
-    
-    # Odds
     bookmaker_name = Column(String)
     odd_home_used = Column(Float)
     odd_draw_used = Column(Float)
     odd_away_used = Column(Float)
-    
-    # Resultados
     math_prob_home = Column(Float)
     ai_delta_adjustment = Column(Float)
     final_prob_home = Column(Float)
-    
     expected_value = Column(Float)
     is_value_bet = Column(Boolean)
-    
-    # IA Analysis
-    ai_analysis_json = Column(JSON) 
+    ai_analysis_json = Column(JSON)
+    stake = Column(Float, default=0.0)
+    status = Column(String, default="PENDING")
     
     match = relationship("Match", back_populates="predictions")
+    user = relationship("User", back_populates="predictions")
 
-# Função helper para criar as tabelas
+    def calculate_profit(self):
+        if self.status == 'GREEN':
+            odd_used = self.odd_home_used if self.final_prob_home > 0.5 else self.odd_away_used
+            return (self.stake * odd_used) - self.stake
+        elif self.status == 'RED':
+            return -self.stake
+        return 0.0
+
 def init_db():
     try:
-        print("🛠️ Verificando tabelas no banco...")
-        # Testa conexão real
-        with engine.connect() as conn:
-            pass
-        # Cria tabelas se não existirem
-        Base.metadata.create_all(bind=engine)
-        print("✅ Banco de Dados conectado e sincronizado com sucesso!")
+        with engine.connect() as connection:
+            print("✅ Banco de Dados conectado!")
+            Base.metadata.create_all(bind=engine)
+            print("Sync de tabelas básicas concluído.")
+
+            inspector = inspect(engine)
+            
+            # Função auxiliar para adicionar colunas
+            def add_column_if_not_exists(table_name, column_name, column_definition):
+                if inspector.has_table(table_name):
+                    columns = [c['name'] for c in inspector.get_columns(table_name)]
+                    if column_name not in columns:
+                        print(f"⚠️ Adicionando coluna '{column_name}' à tabela '{table_name}'...")
+                        connection.execute(text(f'ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}'))
+
+            with connection.begin(): # Transação para DDL
+                # Tabela Users
+                add_column_if_not_exists('users', 'kelly_fraction', 'FLOAT DEFAULT 0.1')
+
+                # Tabela Predictions
+                add_column_if_not_exists('predictions', 'stake', 'FLOAT DEFAULT 0.0')
+                add_column_if_not_exists('predictions', 'status', 'VARCHAR(50) DEFAULT \'PENDING\'')
+                add_column_if_not_exists('predictions', 'user_id', 'INTEGER REFERENCES users(id)')
+                
+                # Tabela Wallet
+                add_column_if_not_exists('wallet', 'user_id', 'INTEGER REFERENCES users(id)')
+
+            print("✅ Sincronização com o Banco de Dados completa!")
+
     except Exception as e:
-        print(f"❌ ERRO CRÍTICO ao conectar/criar tabelas: {e}")
-        print("Dica: Verifique se o IP da sua máquina está permitido no Dashboard do NeonDB se estiver usando nuvem.")
-        raise e
-        
+        print(f"❌ Erro Crítico DB: {e}")
+
 if __name__ == "__main__":
     init_db()

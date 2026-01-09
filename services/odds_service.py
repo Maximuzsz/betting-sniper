@@ -20,13 +20,14 @@ class OddsService:
             return []
     
     def get_upcoming_matches(self, sport_key='soccer_brazil_campeonato'):
-        """Fetch matches with odds for a specific league."""
+        """Fetch matches with odds for a specific league, aggregating from multiple regions."""
         url = f"{self.base_url}/sports/{sport_key}/odds"
         
-        regions_list = ['us', 'uk', 'au', 'eu'] if 'brazil' in sport_key else ['eu', 'us', 'uk']
-        last_response = None
-        last_region = None
+        # Prioritize regions where Bet365 is more common
+        regions_list = ['uk', 'eu', 'us', 'au']
         
+        aggregated_matches = {}
+
         for region in regions_list:
             params = {
                 'apiKey': self.api_key, 
@@ -35,31 +36,48 @@ class OddsService:
                 'oddsFormat': 'decimal'
             }
             try:
-                r = requests.get(url, params=params, timeout=10)
-                last_response = r
-                last_region = region
+                r = requests.get(url, params=params, timeout=12)
                 
                 if r.status_code == 200:
-                    data = r.json()
-                    if isinstance(data, list):
-                        if len(data) > 0:
-                            print(f"✅ Found {len(data)} matches in region {region}")
-                            return data
-                        continue
-                    elif isinstance(data, dict) and 'error' in data:
-                        return {"error": data.get('error', 'Unknown error')}
-                elif r.status_code == 401:
-                    error_msg = r.json().get('message', 'Invalid API key') if r.text else 'Invalid API key'
-                    return {"error": error_msg}
-                elif r.status_code == 429:
-                    return {"error": "Rate limit exceeded. Try again later."}
+                    matches_from_region = r.json()
                     
-            except requests.exceptions.Timeout:
-                continue
-            except requests.exceptions.RequestException:
-                continue
-            except Exception:
+                    if not isinstance(matches_from_region, list):
+                        continue
+
+                    print(f"✅ Found {len(matches_from_region)} matches in region '{region}' for {sport_key}")
+
+                    for match in matches_from_region:
+                        match_id = match.get('id')
+                        if not match_id:
+                            continue
+
+                        if match_id not in aggregated_matches:
+                            # Se o jogo não está no nosso dicionário, adiciona
+                            aggregated_matches[match_id] = match
+                        else:
+                            # Se o jogo já existe, agrega os bookmakers
+                            existing_bookmakers = aggregated_matches[match_id].get('bookmakers', [])
+                            new_bookmakers = match.get('bookmakers', [])
+                            
+                            # Evita duplicatas, mantendo os bookmakers já existentes
+                            existing_keys = {b['key'] for b in existing_bookmakers}
+                            for bookmaker in new_bookmakers:
+                                if bookmaker['key'] not in existing_keys:
+                                    existing_bookmakers.append(bookmaker)
+                            
+                            aggregated_matches[match_id]['bookmakers'] = existing_bookmakers
+                
+                elif r.status_code == 401:
+                    return {"error": "API Key inválida."}
+                
+            except requests.exceptions.RequestException as e:
+                print(f"⚠️ Request error for region {region}: {e}")
                 continue
         
-        print(f"ℹ️ No region returned matches for {sport_key}")
-        return []
+        if not aggregated_matches:
+            print(f"ℹ️ No matches found for {sport_key} in any region.")
+            return []
+            
+        final_list = list(aggregated_matches.values())
+        print(f"✨ Total de {len(final_list)} jogos únicos agregados.")
+        return final_list
