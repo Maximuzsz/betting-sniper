@@ -1,4 +1,9 @@
 import streamlit as st
+try:
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
 from db.queries import save_to_db, get_wallet_balance
 from utils.math_engine import PoissonEngine
 
@@ -98,11 +103,42 @@ def show_analysis_tab(user_id, liga_selecionada, services):
                         h_c = st.number_input("Gols Contra (Média)", 0.0, 5.0, key="hc", step=0.1, help="Média de gols sofridos nos últimos jogos")
                     with col2:
                         st.markdown("<h2 style='text-align: center; color: gray;'>VS</h2>", unsafe_allow_html=True)
+                        st.markdown(f"<div style='text-align: center; color: #888;'><small>Empate</small><br><b>{odd_draw:.2f}</b></div>", unsafe_allow_html=True)
                     with col3:
                         st.markdown(f"**✈️ {match_data['away_team']}**")
                         st.caption(f"Odd: {odd_away:.2f}")
                         a_s = st.number_input("Gols Pró (Média)", 0.0, 5.0, key="as", step=0.1)
                         a_c = st.number_input("Gols Contra (Média)", 0.0, 5.0, key="ac", step=0.1)
+
+                # --- GRÁFICO COMPARATIVO (RADAR) ---
+                with st.expander("📊 Comparativo Tático (Radar)", expanded=False):
+                    if PLOTLY_AVAILABLE:
+                        # Normalização simples para visualização (0 a 5)
+                        categories = ['Ataque (Gols Feitos)', 'Defesa (Solidez)', 'Equilíbrio']
+                        
+                        # Defesa: Invertemos o valor (quanto menos gols sofre, maior a nota)
+                        # Assumindo média da liga ~1.35. Se sofre 0.5 é excelente (nota alta). Se sofre 2.0 é ruim.
+                        def calc_def_score(conceded):
+                            return max(0, 5 - (conceded * 2)) # Ex: 0.5 -> 4.0, 2.0 -> 1.0
+                        
+                        h_def_score = calc_def_score(h_c)
+                        a_def_score = calc_def_score(a_c)
+                        
+                        # Equilíbrio: Relação Ataque/Defesa
+                        h_bal = (h_s + h_def_score) / 2
+                        a_bal = (a_s + a_def_score) / 2
+
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatterpolar(
+                            r=[h_s, h_def_score, h_bal], theta=categories, fill='toself', name=match_data['home_team'], line_color='green'
+                        ))
+                        fig.add_trace(go.Scatterpolar(
+                            r=[a_s, a_def_score, a_bal], theta=categories, fill='toself', name=match_data['away_team'], line_color='red'
+                        ))
+                        fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 5])), showlegend=True, height=300, margin=dict(l=40, r=40, t=20, b=20))
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.warning("Biblioteca 'plotly' não encontrada. Instale com `pip install plotly` para ver o gráfico.")
 
                 if st.button("🚀 EXECUTAR ANÁLISE", type="primary", use_container_width=True):
                     with st.status("🤖 Iniciando Protocolo Sniper...", expanded=True) as status:

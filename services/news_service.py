@@ -4,6 +4,7 @@ Uses DuckDuckGo to find lineups, injuries and pre-match analysis.
 """
 import unicodedata
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from bs4 import BeautifulSoup
 from services.webscraper import scrape_page_content
@@ -173,6 +174,7 @@ class NewsService:
         unique_links = set()
         articles_data = []
         home_norm, away_norm = self._normalize(home_team), self._normalize(away_team)
+        candidates = []
 
         try:
             ddgs = DDGS()
@@ -181,9 +183,6 @@ class NewsService:
             return "Error accessing search service. AI will use statistics only."
 
         for q in queries:
-            if len(articles_data) >= 5:
-                break
-                
             try:
                 print(f"   🔎 Searching: '{q[:60]}...'")
                 results = self._search_with_fallback(ddgs, q, search_region)
@@ -192,9 +191,6 @@ class NewsService:
                     continue
 
                 for res in results:
-                    if len(articles_data) >= 5:
-                        break
-                        
                     link = res.get('href', '') or res.get('url', '')
                     title = res.get('title', '')
                     snippet = res.get('body', '')
@@ -217,23 +213,36 @@ class NewsService:
                     if self._is_trusted_source(link, is_brazilian):
                         prelim_score += 5
                     
-                    print(f"   📖 Analyzing: {title[:55]}... (score: {prelim_score})")
-                    
-                    content, lineup_info = self._scrape_page_content(link, [home_team, away_team])
-                    
-                    if content and len(content) > 250:
-                        final_score = self._calculate_relevance_score(content)
-                        if self._is_trusted_source(link, is_brazilian):
-                            final_score += 5
-                        
-                        if final_score >= 3:
-                            articles_data.append({
-                                'title': title, 'link': link, 'content': content, 'score': final_score
-                            })
-                            print(f"      ✅ Extracted! Score: {final_score}")
+                    # Adiciona à lista de candidatos para processamento paralelo
+                    candidates.append({'link': link, 'title': title, 'prelim_score': prelim_score})
                             
             except Exception as e:
                 print(f"   ⚠️ Search error: {e}")
+
+        # Processamento Paralelo dos Artigos
+        if candidates:
+            # Limita a 5 candidatos mais promissores para não sobrecarregar
+            candidates.sort(key=lambda x: x['prelim_score'], reverse=True)
+            top_candidates = candidates[:6]
+            
+            print(f"   🚀 Scraping {len(top_candidates)} articles in parallel...")
+            
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                future_to_article = {executor.submit(self._scrape_page_content, c['link'], [home_team, away_team]): c for c in top_candidates}
+                
+                for future in as_completed(future_to_article):
+                    c = future_to_article[future]
+                    try:
+                        content, lineup_info = future.result()
+                        if content and len(content) > 250:
+                            final_score = self._calculate_relevance_score(content)
+                            if self._is_trusted_source(c['link'], is_brazilian): final_score += 5
+                            
+                            if final_score >= 3:
+                                articles_data.append({'title': c['title'], 'link': c['link'], 'content': content, 'score': final_score})
+                                print(f"      ✅ Extracted: {c['title'][:30]}... (Score: {final_score})")
+                    except Exception as exc:
+                        print(f"      ⚠️ Error processing {c['link']}: {exc}")
 
         if not articles_data:
             return "No detailed news found. AI will use statistics only."

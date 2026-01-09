@@ -46,6 +46,15 @@ def show_history_tab(user_id):
             with tab_chart2:
                 status_counts = df["Status"].value_counts()
                 st.bar_chart(status_counts, color="#2E8B57" if status_counts.get('GREEN', 0) >= status_counts.get('RED', 0) else "#FF6347")
+            
+            # Botão de Exportação
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Baixar Histórico (CSV)",
+                data=csv,
+                file_name=f'sniper_history_{user_id}.csv',
+                mime='text/csv',
+            )
 
         st.divider()
         # Reverte a lista para mostrar os mais recentes primeiro na tabela
