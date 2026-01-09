@@ -23,7 +23,12 @@ DATABASE_URL = get_database_url()
 
 try:
     connect_args = {"sslmode": "require"} if "neon.tech" in DATABASE_URL or "sslmode" in DATABASE_URL else {}
-    engine = create_engine(DATABASE_URL, connect_args=connect_args) if DATABASE_URL else create_engine("sqlite:///sniper.db")
+    
+    if DATABASE_URL:
+        # pool_pre_ping=True evita quedas de conexão em bancos na nuvem (Render, Neon, etc)
+        engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True, pool_recycle=1800)
+    else:
+        engine = create_engine("sqlite:///sniper.db", connect_args={"check_same_thread": False})
 except Exception as e:
     print(f"❌ Erro na configuração da Engine: {e}")
     raise e
@@ -87,6 +92,7 @@ class Prediction(Base):
     is_value_bet = Column(Boolean)
     ai_analysis_json = Column(JSON)
     stake = Column(Float, default=0.0)
+    selected_team = Column(String)
     status = Column(String, default="PENDING")
     
     match = relationship("Match", back_populates="predictions")
@@ -100,7 +106,14 @@ class Prediction(Base):
             return -self.stake
         return 0.0
 
+# Variável global para evitar execução repetida da migração a cada rerun do Streamlit
+_db_initialized = False
+
 def init_db():
+    global _db_initialized
+    if _db_initialized:
+        return
+
     try:
         with engine.connect() as connection:
             print("✅ Banco de Dados conectado!")
@@ -124,12 +137,14 @@ def init_db():
                 # Tabela Predictions
                 add_column_if_not_exists('predictions', 'stake', 'FLOAT DEFAULT 0.0')
                 add_column_if_not_exists('predictions', 'status', 'VARCHAR(50) DEFAULT \'PENDING\'')
+                add_column_if_not_exists('predictions', 'selected_team', 'VARCHAR(10)')
                 add_column_if_not_exists('predictions', 'user_id', 'INTEGER REFERENCES users(id)')
                 
                 # Tabela Wallet
                 add_column_if_not_exists('wallet', 'user_id', 'INTEGER REFERENCES users(id)')
 
             print("✅ Sincronização com o Banco de Dados completa!")
+            _db_initialized = True
 
     except Exception as e:
         print(f"❌ Erro Crítico DB: {e}")

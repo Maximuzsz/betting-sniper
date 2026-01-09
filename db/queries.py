@@ -62,7 +62,16 @@ def resolve_bet(prediction_id, result, user_id):
         wallet = session.query(Wallet).filter_by(user_id=user_id).first()
         
         if result == 'GREEN':
-            odd_final = pred.odd_home_used if pred.final_prob_home > 0.5 else pred.odd_away_used
+            # Usa o time selecionado se disponível, senão usa fallback (lógica antiga)
+            if pred.selected_team == 'home':
+                odd_final = pred.odd_home_used
+            elif pred.selected_team == 'away':
+                odd_final = pred.odd_away_used
+            elif pred.selected_team == 'draw':
+                odd_final = pred.odd_draw_used
+            else:
+                odd_final = pred.odd_home_used if pred.final_prob_home > 0.5 else pred.odd_away_used
+            
             return_amount = pred.stake * odd_final
             wallet.balance += return_amount
         
@@ -78,6 +87,7 @@ def resolve_bet(prediction_id, result, user_id):
 def save_to_db(user_id, match_data, inputs, odds, math_res, ai_res, final_prob, ev, selected_side, stake):
     session = Session()
     try:
+        stake = float(stake)
         wallet = session.query(Wallet).filter_by(user_id=user_id).first()
         if not wallet or wallet.balance < stake:
             return False, "Saldo insuficiente!"
@@ -104,6 +114,7 @@ def save_to_db(user_id, match_data, inputs, odds, math_res, ai_res, final_prob, 
             bookmaker_name="Agregado",
             odd_home_used=float(odds['home']),
             odd_away_used=float(odds['away']),
+            odd_draw_used=float(odds.get('draw', 0.0)),
             math_prob_home=float(math_res['home_win']),
             ai_delta_adjustment=float(ai_res.get('delta_home', 0)),
             final_prob_home=float(final_prob),
@@ -111,6 +122,7 @@ def save_to_db(user_id, match_data, inputs, odds, math_res, ai_res, final_prob, 
             is_value_bet=(ev > 0.05),
             ai_analysis_json=ai_res,
             stake=float(stake),
+            selected_team=selected_side,
             status='PENDING'
         )
         session.add(pred)
@@ -119,5 +131,27 @@ def save_to_db(user_id, match_data, inputs, odds, math_res, ai_res, final_prob, 
     except Exception as e:
         session.rollback()
         return False, str(e)
+    finally:
+        session.close()
+
+def get_sidebar_stats(user_id):
+    """Busca estatísticas rápidas para o menu lateral."""
+    session = Session()
+    try:
+        predictions = session.query(Prediction).filter_by(user_id=user_id).all()
+        
+        pending = [p for p in predictions if p.status == 'PENDING']
+        resolved = [p for p in predictions if p.status in ['GREEN', 'RED']]
+        
+        total_profit = sum(p.calculate_profit() for p in resolved)
+        total_staked = sum(p.stake for p in resolved)
+        
+        return {
+            'pending_count': len(pending),
+            'pending_exposure': sum(p.stake for p in pending),
+            'total_profit': total_profit,
+            'winrate': (len([p for p in resolved if p.status == 'GREEN']) / len(resolved) * 100) if resolved else 0.0,
+            'roi': (total_profit / total_staked * 100) if total_staked > 0 else 0.0
+        }
     finally:
         session.close()

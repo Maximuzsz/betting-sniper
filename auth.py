@@ -37,58 +37,79 @@ def authenticate_user(session, username, password):
 
 # Interface de Login/Registro
 def show_login_signup_interface(session):
-    st.title("🎯 Sniper Pro: Bem-vindo!")
+    # CSS para centralizar e estilizar
+    st.markdown("""
+        <style>
+        div[data-testid="stVerticalBlock"] > div:has(div.stForm) {
+            background-color: #262730;
+            padding: 2rem;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            border: 1px solid #444;
+        }
+        .stButton>button {
+            width: 100%;
+            border-radius: 8px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            height: 3rem;
+        }
+        h1 { text-align: center; color: #4CAF50; font-size: 3rem !important; margin-bottom: 0; }
+        .subtitle { text-align: center; color: #aaa; margin-bottom: 2rem; font-size: 1.2rem; }
+        </style>
+    """, unsafe_allow_html=True)
+
+    # Centralizando o formulário
+    col1, col2, col3 = st.columns([1, 1.5, 1])
     
-    # Inicializa o estado da sessão se não existir
-    if 'page' not in st.session_state:
-        st.session_state.page = 'Login'
-
-    # Funções para mudar de página
-    def go_to_signup():
-        st.session_state.page = 'Signup'
-    def go_to_login():
-        st.session_state.page = 'Login'
-
-    if st.session_state.page == 'Login':
-        st.header("Login")
-        with st.form("login_form"):
-            username = st.text_input("Usuário")
-            password = st.text_input("Senha", type="password")
-            submitted = st.form_submit_button("Entrar")
-
-            if submitted:
-                user = authenticate_user(session, username, password)
-                if user:
-                    st.session_state['logged_in'] = True
-                    st.session_state['user_id'] = user.id
-                    st.session_state['username'] = user.username
-                    st.session_state['kelly_fraction'] = user.kelly_fraction
-                    st.rerun()
-                else:
-                    st.error("Usuário ou senha inválidos.")
+    with col2:
+        st.markdown("<h1>🎯 Sniper Pro</h1>", unsafe_allow_html=True)
+        st.markdown("<p class='subtitle'>Inteligência Artificial para Apostas de Valor</p>", unsafe_allow_html=True)
         
-        st.button("Não tem uma conta? Crie uma!", on_click=go_to_signup)
-    
-    elif st.session_state.page == 'Signup':
-        st.header("Criar Conta")
-        with st.form("signup_form"):
-            username = st.text_input("Escolha um usuário")
-            password = st.text_input("Escolha uma senha", type="password")
-            confirm_password = st.text_input("Confirme a senha", type="password")
-            submitted = st.form_submit_button("Registrar")
+        tab_login, tab_signup = st.tabs(["🔐 Login", "✨ Criar Conta"])
 
-            if submitted:
-                if password == confirm_password:
-                    success, message = register_user(session, username, password)
-                    if success:
-                        st.success(message)
-                        go_to_login()
+        with tab_login:
+            with st.form("login_form"):
+                username = st.text_input("Usuário", placeholder="Digite seu usuário")
+                password = st.text_input("Senha", type="password", placeholder="Digite sua senha")
+                st.markdown("<br>", unsafe_allow_html=True)
+                submitted = st.form_submit_button("ACESSAR SISTEMA", type="primary")
+
+                if submitted:
+                    user = authenticate_user(session, username, password)
+                    if user:
+                        st.session_state['logged_in'] = True
+                        st.session_state['user_id'] = user.id
+                        st.session_state['username'] = user.username
+                        st.session_state['kelly_fraction'] = user.kelly_fraction
+                        st.toast("Login realizado com sucesso!", icon="🔓")
                         st.rerun()
                     else:
-                        st.error(message)
-                else:
-                    st.error("As senhas não coincidem.")
+                        st.error("Usuário ou senha incorretos.")
         
-        st.button("Já tem uma conta? Faça login!", on_click=go_to_login)
+        with tab_signup:
+            with st.form("signup_form"):
+                new_user = st.text_input("Escolha um usuário", placeholder="Ex: trader_pro")
+                new_pass = st.text_input("Escolha uma senha", type="password")
+                confirm_pass = st.text_input("Confirme a senha", type="password")
+                st.markdown("<br>", unsafe_allow_html=True)
+                submitted = st.form_submit_button("CRIAR CONTA", type="primary")
+
+                if submitted:
+                    if new_pass == confirm_pass:
+                        if len(new_pass) < 4:
+                            st.warning("A senha deve ter pelo menos 4 caracteres.")
+                        elif len(new_user) < 3:
+                            st.warning("O usuário deve ter pelo menos 3 caracteres.")
+                        else:
+                            success, message = register_user(session, new_user, new_pass)
+                            if success:
+                                st.success(message)
+                                st.info("Conta criada! Acesse a aba de Login.")
+                            else:
+                                st.error(message)
+                    else:
+                        st.error("As senhas não coincidem.")
 
     return False

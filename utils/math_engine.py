@@ -2,8 +2,9 @@ from scipy.stats import poisson
 
 
 class PoissonEngine:
-    def __init__(self, league_avg_goals=1.3):
+    def __init__(self, league_avg_goals=1.35, home_advantage=1.15):
         self.league_avg = league_avg_goals
+        self.home_advantage = home_advantage # 15% de bônus para o mandante (padrão global)
 
     def calculate_probabilities(self, home_stats, away_stats):
         """
@@ -26,7 +27,7 @@ class PoissonEngine:
 
         # 2. Expected Goals (Lambda)
         # Home Attack x Away Defense x League Average
-        home_lambda = h_att * a_def * self.league_avg
+        home_lambda = h_att * a_def * self.league_avg * self.home_advantage
         away_lambda = a_att * h_def * self.league_avg
 
         # 3. Score Probabilities (Matrix 0x0 to 5x5)

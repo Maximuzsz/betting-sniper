@@ -1,5 +1,5 @@
 import streamlit as st
-from db.queries import save_to_db
+from db.queries import save_to_db, get_wallet_balance
 from utils.math_engine import PoissonEngine
 
 def calculate_kelly_criterion(prob_real, odd_casa, bankroll, fraction=0.125):
@@ -11,6 +11,17 @@ def calculate_kelly_criterion(prob_real, odd_casa, bankroll, fraction=0.125):
     safe_percentage = max(0, kelly_percentage * fraction)
     stake = bankroll * safe_percentage
     return stake, safe_percentage * 100
+
+def find_odd(odds_dict, team_name):
+    """Tenta encontrar a odd do time mesmo com pequenas variações no nome."""
+    # 1. Tentativa exata
+    if team_name in odds_dict:
+        return odds_dict[team_name]
+    # 2. Tentativa parcial (ex: 'Man City' in 'Manchester City')
+    for key, val in odds_dict.items():
+        if key in team_name or team_name in key:
+            return val
+    return 0.0
 
 def show_analysis_tab(user_id, liga_selecionada, services):
     odds_service, ai_service, news_service, math_engine, stats_service = services
@@ -35,7 +46,7 @@ def show_analysis_tab(user_id, liga_selecionada, services):
                 bookmakers = match_data.get('bookmakers', [])
                 
                 # Tenta encontrar na Bet365 primeiro
-                odds_data = next((book['markets'][0]['outcomes'] for book in bookmakers if book['key'] == 'bet365'), None)
+                odds_data = next((book['markets'][0]['outcomes'] for book in bookmakers if book['key'] == 'bet365' and book.get('markets')), None)
                 
                 # Se não encontrar, pega o primeiro bookmaker disponível que tenha o mercado 'h2h'
                 if not odds_data:
@@ -71,62 +82,143 @@ def show_analysis_tab(user_id, liga_selecionada, services):
                         
                         st.rerun()
 
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.caption(f"🏠 {match_data['home_team']}")
-                    st.metric("Odd", f"{odds.get(match_data['home_team'], 0):.2f}")
-                    h_s = st.number_input("Gols Marcados (média)", 0.0, 5.0, key="hs", step=0.1)
-                    h_c = st.number_input("Gols Sofridos (média)", 0.0, 5.0, key="hc", step=0.1)
-                with col2:
-                    st.caption(f"✈️ {match_data['away_team']}")
-                    st.metric("Odd", f"{odds.get(match_data['away_team'], 0):.2f}")
-                    a_s = st.number_input("Gols Marcados (média)", 0.0, 5.0, key="as", step=0.1)
-                    a_c = st.number_input("Gols Sofridos (média)", 0.0, 5.0, key="ac", step=0.1)
+                # Busca odds de forma segura
+                odd_home = find_odd(odds, match_data['home_team'])
+                odd_away = find_odd(odds, match_data['away_team'])
+                odd_draw = find_odd(odds, 'Draw') # A API geralmente retorna 'Draw'
+
+                # --- PAINEL DE CONFRONTO (DESIGN MELHORADO) ---
+                with st.container(border=True):
+                    st.markdown("#### ⚔️ Dados do Confronto")
+                    col1, col2, col3 = st.columns([1, 0.2, 1])
+                    with col1:
+                        st.markdown(f"**🏠 {match_data['home_team']}**")
+                        st.caption(f"Odd: {odd_home:.2f}")
+                        h_s = st.number_input("Gols Pró (Média)", 0.0, 5.0, key="hs", step=0.1, help="Média de gols marcados nos últimos jogos")
+                        h_c = st.number_input("Gols Contra (Média)", 0.0, 5.0, key="hc", step=0.1, help="Média de gols sofridos nos últimos jogos")
+                    with col2:
+                        st.markdown("<h2 style='text-align: center; color: gray;'>VS</h2>", unsafe_allow_html=True)
+                    with col3:
+                        st.markdown(f"**✈️ {match_data['away_team']}**")
+                        st.caption(f"Odd: {odd_away:.2f}")
+                        a_s = st.number_input("Gols Pró (Média)", 0.0, 5.0, key="as", step=0.1)
+                        a_c = st.number_input("Gols Contra (Média)", 0.0, 5.0, key="ac", step=0.1)
 
                 if st.button("🚀 EXECUTAR ANÁLISE", type="primary", use_container_width=True):
-                    with st.spinner("Analisando notícias, calculando probabilidades e consultando IA..."):
+                    with st.status("🤖 Iniciando Protocolo Sniper...", expanded=True) as status:
+                        st.write("📰 Varrendo portais de notícias e escalações...")
                         news = news_service.get_match_context(match_data['home_team'], match_data['away_team'], liga_selecionada[1])
+                        
+                        st.write("🧮 Executando simulação de Monte Carlo/Poisson...")
                         math_res = math_engine.calculate_probabilities({'scored': h_s, 'conceded': h_c}, {'scored': a_s, 'conceded': a_c})
+                        
+                        st.write("🧠 Consultando Inteligência Artificial (Gemini)...")
                         ai_res = ai_service.analyze_context(match_data, math_res, news)
+                        
+                        # Recalcula odds no momento da análise para garantir consistência
+                        current_odd_h = find_odd(odds, match_data['home_team'])
+                        current_odd_a = find_odd(odds, match_data['away_team'])
+                        current_odd_d = find_odd(odds, 'Draw')
+
                         st.session_state['analysis_results'] = {
                             'news': news, 'math_res': math_res, 'ai_res': ai_res,
                             'inputs': {'h_s': h_s, 'h_c': h_c, 'a_s': a_s, 'a_c': a_c},
-                            'odds': {'home': odds.get(match_data['home_team'], 0), 'away': odds.get(match_data['away_team'], 0)}
+                            'odds': {'home': current_odd_h, 'away': current_odd_a, 'draw': current_odd_d}
                         }
+                        status.update(label="✅ Análise Concluída com Sucesso!", state="complete", expanded=False)
                     st.rerun()
 
                 if 'analysis_results' in st.session_state:
                     res = st.session_state['analysis_results']
                     st.info(f"🧠 Análise da IA: {res['ai_res'].get('analise_textual', 'N/A')}")
+                    
+                    # Alerta se a IA não teve notícias suficientes para trabalhar
+                    news_content = res.get('news', '')
+                    if not news_content or len(news_content) < 100 or "No detailed news" in news_content or "Error accessing" in news_content:
+                        st.warning("⚠️ **Atenção:** Não foram encontradas notícias recentes relevantes. A análise da IA está baseada majoritariamente em estatísticas e pode ignorar lesões de última hora.")
 
                     prob_h = max(0.01, min(0.99, res['math_res']['home_win'] + res['ai_res'].get('delta_home', 0)))
                     prob_a = max(0.01, min(0.99, res['math_res']['away_win'] + res['ai_res'].get('delta_away', 0)))
+                    # O empate absorve o restante da probabilidade
+                    prob_d = max(0.01, 1.0 - prob_h - prob_a)
+
                     ev_h = (prob_h * res['odds']['home']) - 1
                     ev_a = (prob_a * res['odds']['away']) - 1
+                    ev_d = (prob_d * res['odds']['draw']) - 1
+
+                    # Cálculo das Odds Justas (Fair Odds)
+                    fair_odd_h = 1 / prob_h if prob_h > 0 else 0
+                    fair_odd_a = 1 / prob_a if prob_a > 0 else 0
+                    fair_odd_d = 1 / prob_d if prob_d > 0 else 0
                     
-                    current_balance = st.session_state.get('current_balance', 0)
+                    # CORREÇÃO: Busca o saldo real do banco de dados
+                    current_balance = get_wallet_balance(user_id)
                     kelly_fraction = st.session_state.get('kelly_fraction', 0.1)
 
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.markdown(f"**{match_data['home_team']}**")
-                        stake_h, _ = calculate_kelly_criterion(prob_h, res['odds']['home'], current_balance, kelly_fraction)
-                        st.metric("Prob. Real 🆚 EV", f"{prob_h:.1%}", f"{ev_h:+.1%}")
-                        if ev_h > 0.05:
-                            st.success(f"Valor Encontrado! Stake Sugerida: R$ {stake_h:.2f}")
-                            if st.button(f"💾 Registrar Aposta", key="btn_h"):
-                                ok, msg = save_to_db(user_id, match_data, res['inputs'], res['odds'], res['math_res'], res['ai_res'], prob_h, ev_h, 'home', stake_h)
-                                if ok: st.toast("Aposta Registrada!", icon="💰"); st.rerun()
-                                else: st.error(msg)
-                    with c2:
-                        st.markdown(f"**{match_data['away_team']}**")
-                        stake_a, _ = calculate_kelly_criterion(prob_a, res['odds']['away'], current_balance, kelly_fraction)
-                        st.metric("Prob. Real 🆚 EV", f"{prob_a:.1%}", f"{ev_a:+.1%}")
-                        if ev_a > 0.05:
-                            st.success(f"Valor Encontrado! Stake Sugerida: R$ {stake_a:.2f}")
-                            if st.button(f"💾 Registrar Aposta", key="btn_a"):
-                                ok, msg = save_to_db(user_id, match_data, res['inputs'], res['odds'], res['math_res'], res['ai_res'], prob_a, ev_a, 'away', stake_a)
-                                if ok: st.toast("Aposta Registrada!", icon="💰"); st.rerun()
-                                else: st.error(msg)
+                    # --- EXIBIÇÃO PRINCIPAL (MATCH ODDS) ---
+                    st.markdown("### 🏆 Resultado Final (Match Odds)")
+                    c1, c2, c3 = st.columns(3)
+                    
+                    # Função auxiliar para exibir card de aposta
+                    def show_bet_card(col, title, prob, fair_odd, book_odd, ev, side, key_suffix):
+                        with col:
+                            with st.container(border=True):
+                                st.markdown(f"#### {title}")
+                                
+                                # Classificação de Confiança (Probabilidade de Acerto)
+                                if prob >= 0.65:
+                                    conf_label = "🔥 Muito Provável"
+                                    conf_color = "green"
+                                elif prob >= 0.45:
+                                    conf_label = "✅ Provável"
+                                    conf_color = "blue"
+                                elif prob >= 0.30:
+                                    conf_label = "⚠️ Arriscado"
+                                    conf_color = "orange"
+                                else:
+                                    conf_label = "💣 Zebra (Difícil)"
+                                    conf_color = "red"
+                                
+                                st.markdown(f":{conf_color}[**{conf_label}**]")
+                                st.progress(prob, text=f"Chance: {prob:.1%}")
+                                
+                                # Comparativo de Odds
+                                if book_odd > fair_odd:
+                                    st.markdown(f"**Odd Justa:** :green[{fair_odd:.2f}]")
+                                else:
+                                    st.markdown(f"**Odd Justa:** :red[{fair_odd:.2f}]")
+                                
+                                st.metric("EV (Valor Esperado)", f"{ev:+.1%}", delta_color="normal" if ev < 0 else "inverse")
+                                
+                                if ev > 0.02: # Limiar de 2% para considerar valor
+                                    stake, _ = calculate_kelly_criterion(prob, book_odd, current_balance, kelly_fraction)
+                                    st.success(f"💎 **Stake: R$ {stake:.2f}**")
+                                    if st.button(f"Apostar", key=f"btn_{key_suffix}", use_container_width=True):
+                                        ok, msg = save_to_db(user_id, match_data, res['inputs'], res['odds'], res['math_res'], res['ai_res'], prob, ev, side, stake)
+                                        if ok: st.toast("Aposta Registrada!", icon="💰"); st.rerun()
+                                        else: st.error(msg)
+                                else:
+                                    st.caption("🚫 Sem valor.")
+
+                    show_bet_card(c1, match_data['home_team'], prob_h, fair_odd_h, res['odds']['home'], ev_h, 'home', 'h')
+                    show_bet_card(c2, "Empate", prob_d, fair_odd_d, res['odds']['draw'], ev_d, 'draw', 'd')
+                    show_bet_card(c3, match_data['away_team'], prob_a, fair_odd_a, res['odds']['away'], ev_a, 'away', 'a')
+
+                    # --- EXIBIÇÃO SECUNDÁRIA (MERCADOS ALTERNATIVOS) ---
+                    st.divider()
+                    st.markdown("### 📊 Insights de Mercados Alternativos (IA)")
+                    
+                    ac1, ac2 = st.columns(2)
+                    with ac1:
+                        trend_goals = res['ai_res'].get('tendencia_gols', 'Neutra')
+                        color_g = "green" if "Alta" in trend_goals else "red" if "Baixa" in trend_goals else "gray"
+                        st.markdown(f"**Gols (Over/Under):** :{color_g}[{trend_goals}]")
+                        st.caption("Baseado na análise textual de desfalques ofensivos/defensivos.")
+                        
+                    with ac2:
+                        trend_btts = res['ai_res'].get('tendencia_btts', 'Duvidoso')
+                        color_b = "green" if "Sim" in trend_btts else "red" if "Não" in trend_btts else "gray"
+                        st.markdown(f"**Ambos Marcam (BTTS):** :{color_b}[{trend_btts}]")
+                        st.caption("Baseado no estilo de jogo e necessidade dos times.")
         else:
             st.info("👈 Use o menu lateral para escanear uma liga e começar.")

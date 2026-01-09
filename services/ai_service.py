@@ -20,9 +20,7 @@ class AIService:
         }
         # Lista de prioridade (Modelos mais novos e rápidos primeiro)
         self.models_priority = [
-            'gemini-2.0-flash-exp', 
             'gemini-1.5-flash', 
-            'gemini-1.5-flash-latest',
             'gemini-1.5-pro',
             'gemini-pro'
         ]
@@ -72,8 +70,10 @@ class AIService:
         REGRAS DE ANÁLISE:
         1. Escalação: "Time misto", "reservas", "poupar" = PENALIDADE GRAVE.
         2. Desfalques: Ausência de goleiro titular ou artilheiro = PENALIDADE MÉDIA.
-        3. Motivação: "Cumprir tabela", "foco em outra competição" = PENALIDADE LEVE/MÉDIA.
-        4. Mercado: Ignore notícias sobre transferências futuras (2025/2026).
+        3. Motivação (Must Win): Time precisa vencer para ser campeão ou não cair? = BÔNUS LEVE.
+        4. Desmotivação: "Cumprir tabela", "foco em outra competição" = PENALIDADE MÉDIA.
+        5. Estilo de Jogo: Se a notícia citar "retranca" ou "jogo fechado", ajuste a tendência de gols para Baixa.
+        6. Mercado: Ignore notícias sobre transferências futuras.
         
         FORMATO DE SAÍDA (JSON):
         {{
