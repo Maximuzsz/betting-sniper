@@ -21,6 +21,7 @@ from services.settler_service import BetSettler
 # Importando o módulo de segurança que criamos
 from core.security import verify_password, get_password_hash, create_access_token
 import jwt
+from jwt.exceptions import PyJWTError
 
 load_dotenv()
 
@@ -69,7 +70,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
         email: str = payload.get("sub")
         if email is None:
             raise credentials_exception
-    except jwt.PyJWTError:
+    except PyJWTError:
         raise credentials_exception
         
     user = db_manager.get_user_by_email(email)
