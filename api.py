@@ -89,6 +89,35 @@ def start_settler_loop():
         
         # Dorme por 30 minutos em vez de 1 hora para o dashboard atualizar mais rápido
         time.sleep(1800)
+        
+def start_daily_match_fetcher():
+    """Roda em background, busca os jogos na API-Sports e salva no banco."""
+    import time
+    from datetime import datetime, timedelta
+    
+    while True:
+        try:
+            # Pega hoje e amanhã
+            hoje = datetime.now().strftime("%Y-%m-%d")
+            amanha = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+            
+            print(f"🔄 [CRON] Buscando jogos de {hoje} e {amanha} na API-Sports...")
+            
+            # Busca na API
+            matches_hoje = stats_service.fetch_upcoming_matches(hoje)
+            matches_amanha = stats_service.fetch_upcoming_matches(amanha)
+            
+            todos_matches = matches_hoje + matches_amanha
+            
+            if todos_matches:
+                db_manager.save_upcoming_matches(todos_matches)
+                print(f"✅ [CRON] {len(todos_matches)} jogos salvos/atualizados no banco com sucesso!")
+            
+        except Exception as e:
+            print(f"⚠️ Erro no cron de busca de jogos: {e}")
+        
+        # Dorme por 12 horas (43200 segundos) para poupar sua cota!
+        time.sleep(43200)
 
 # --- MODELOS ---
 class UserCreate(BaseModel):
@@ -223,21 +252,21 @@ def get_upcoming_matches(
     date: Optional[str] = None, 
     league_id: Optional[int] = None, 
     season: Optional[int] = None,
-    current_user: dict = Depends(get_current_user) # Mantendo o cadeado JWT!
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Retorna a lista de próximos jogos.
-    Se não passar a data no formato YYYY-MM-DD, ele pega os jogos de hoje.
+    AGORA LENDO DIRETAMENTE DO BANCO DE DADOS! 🚀
     """
-    # Se o frontend não mandar data, assume que é hoje
     if not date:
         date = datetime.now().strftime("%Y-%m-%d")
 
-    matches = stats_service.fetch_upcoming_matches(date_str=date, league_id=league_id, season=season)
+    # Bate no banco em vez de bater na API externa!
+    matches = db_manager.get_matches_by_date(date)
 
     if not matches:
         return {
-            "message": f"Nenhum jogo agendado encontrado para a data {date}.", 
+            "message": f"Nenhum jogo salvo na base para a data {date}.", 
             "total": 0, 
             "matches": []
         }
@@ -319,8 +348,9 @@ def get_my_bets(current_user: dict = Depends(get_current_user)):
     
 @app.on_event("startup")
 async def startup_event():
-    # Inicia o settler em uma thread separada
+    # Inicia o Settler e o nosso novo Fetcher de Jogos em background
     Thread(target=start_settler_loop, daemon=True).start()
+    Thread(target=start_daily_match_fetcher, daemon=True).start()
     
 @app.post("/bets/")
 def place_bet(bet: BetCreate, current_user: dict = Depends(get_current_user)):

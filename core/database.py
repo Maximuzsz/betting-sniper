@@ -2,7 +2,7 @@ import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime, timedelta
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 class DatabaseManager:
     """
@@ -13,15 +13,138 @@ class DatabaseManager:
         self.db_url = os.getenv("DATABASE_URL")
         if not self.db_url:
             raise ValueError("DATABASE_URL não está definida no ficheiro .env")
+            
+        # Garante que as tabelas existem ao iniciar
+        self._create_tables()
 
     def _get_connection(self):
         return psycopg2.connect(self.db_url, cursor_factory=RealDictCursor)
 
+    def _create_tables(self):
+        """
+        Faz o check no boot da API. Cria as tabelas necessárias apenas se elas não existirem.
+        Totalmente seguro para os dados (Non-Destructive).
+        """
+        
+        # 1. Tabela de Usuários
+        query_users = """
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            password_hash VARCHAR(255) NOT NULL,
+            bankroll NUMERIC(10, 2) DEFAULT 0.0,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+
+        # 2. Tabela de Estatísticas (Poisson)
+        query_stats = """
+        CREATE TABLE IF NOT EXISTS team_season_stats (
+            team_id INT,
+            league_id INT,
+            season INT,
+            home_xg NUMERIC(5, 2),
+            away_xg NUMERIC(5, 2),
+            last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (team_id, league_id, season)
+        );
+        """
+
+        # 3. Tabela de Bilhetes de Aposta (Com vínculo ao Usuário)
+        query_bets = """
+        CREATE TABLE IF NOT EXISTS bets (
+            id SERIAL PRIMARY KEY,
+            user_id INT REFERENCES users(id) ON DELETE CASCADE,
+            match_string VARCHAR(255) NOT NULL,
+            market VARCHAR(100) NOT NULL,
+            odd_taken NUMERIC(5, 2) NOT NULL,
+            stake NUMERIC(10, 2) NOT NULL,
+            expected_ev NUMERIC(5, 2),
+            ai_justification TEXT,
+            status VARCHAR(20) DEFAULT 'PENDING',
+            profit NUMERIC(10, 2) DEFAULT 0.0,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+
+        # 4. Tabela de Cache dos Jogos Diários
+        query_matches = """
+        CREATE TABLE IF NOT EXISTS upcoming_matches (
+            fixture_id BIGINT PRIMARY KEY,
+            date TIMESTAMP WITH TIME ZONE,
+            league_id INT,
+            league_name VARCHAR(255),
+            season INT,
+            home_team_id INT,
+            home_team_name VARCHAR(255),
+            home_team_logo VARCHAR(255),
+            away_team_id INT,
+            away_team_name VARCHAR(255),
+            away_team_logo VARCHAR(255)
+        );
+        """
+
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Executa as queries na ordem certa (users tem que existir antes de bets)
+                    cursor.execute(query_users)
+                    cursor.execute(query_stats)
+                    cursor.execute(query_bets)
+                    cursor.execute(query_matches)
+                conn.commit()
+                print("✅ [DB CHECK] Estrutura verificada com sucesso. Dados preservados.")
+        except psycopg2.Error as e:
+            print(f"❌ Erro crítico ao verificar/criar tabelas: {e}")
+
+    # --- NOVAS FUNÇÕES: CACHE DE JOGOS DIÁRIOS ---
+
+    def save_upcoming_matches(self, matches: list):
+        """Salva a lista de jogos no banco, atualizando se já existir."""
+        if not matches:
+            return
+            
+        query = """
+            INSERT INTO upcoming_matches 
+            (fixture_id, date, league_id, league_name, season, home_team_id, home_team_name, home_team_logo, away_team_id, away_team_name, away_team_logo)
+            VALUES (%(fixture_id)s, %(date)s, %(league_id)s, %(league_name)s, %(season)s, %(home_team_id)s, %(home_team_name)s, %(home_team_logo)s, %(away_team_id)s, %(away_team_name)s, %(away_team_logo)s)
+            ON CONFLICT (fixture_id) DO UPDATE SET
+                date = EXCLUDED.date;
+        """
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.executemany(query, matches)
+                conn.commit()
+        except Exception as e:
+            print(f"❌ Erro ao salvar matches no banco: {e}")
+
+    def get_matches_by_date(self, date_str: str) -> list:
+        """Busca os jogos salvos no banco para uma data específica."""
+        query = """
+            SELECT * FROM upcoming_matches 
+            WHERE DATE(date AT TIME ZONE 'America/Sao_Paulo') = %s
+            ORDER BY date ASC;
+        """
+        try:
+            with self._get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, (date_str,))
+                    rows = cursor.fetchall()
+                    
+                    # Converte a data do BD para string ISO para o Frontend (React Native) não quebrar
+                    for row in rows:
+                        if 'date' in row and row['date']:
+                            row['date'] = row['date'].isoformat()
+                    return rows
+        except Exception as e:
+            print(f"❌ Erro ao buscar matches do banco: {e}")
+            return []
+
+    # --- FUNÇÕES ORIGINAIS MANTIDAS INTACTAS ---
+
     def get_cached_team_stats(self, team_id: int, league_id: int, season: int, max_age_days: int = 7) -> Optional[Dict[str, float]]:
-        """
-        Procura as estatísticas na base de dados. 
-        Retorna None se não existir ou se o registo for mais antigo do que max_age_days.
-        """
         query = """
             SELECT home_xg, away_xg, last_updated 
             FROM team_season_stats 
@@ -34,7 +157,6 @@ class DatabaseManager:
                     result = cursor.fetchone()
 
                     if result:
-                        # Verifica se a cache expirou
                         age = datetime.now() - result['last_updated']
                         if age <= timedelta(days=max_age_days):
                             return {
@@ -44,15 +166,11 @@ class DatabaseManager:
                         else:
                             print(f"🔄 Cache expirada para a equipa {team_id}. A necessitar de nova requisição.")
             return None
-            
         except psycopg2.Error as e:
             print(f"❌ Erro ao ler da base de dados: {e}")
             return None
 
     def upsert_team_stats(self, team_id: int, league_id: int, season: int, home_xg: float, away_xg: float):
-        """
-        Insere ou atualiza (Upsert) as estatísticas da equipa na base de dados.
-        """
         query = """
             INSERT INTO team_season_stats (team_id, league_id, season, home_xg, away_xg, last_updated)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
@@ -72,7 +190,6 @@ class DatabaseManager:
             print(f"❌ Erro ao guardar na base de dados: {e}")
     
     def create_user(self, name: str, email: str, password_hash: str, initial_bankroll: float) -> Optional[int]:
-        """Cria um novo usuário com senha criptografada."""
         query = """
             INSERT INTO users (name, email, password_hash, bankroll) 
             VALUES (%s, %s, %s, %s) RETURNING id;
@@ -89,7 +206,6 @@ class DatabaseManager:
             return None
 
     def get_user_by_email(self, email: str) -> Optional[dict]:
-        """Busca o usuário inteiro pelo email para fazer o login."""
         query = "SELECT id, name, email, password_hash, bankroll FROM users WHERE email = %s;"
         try:
             with self._get_connection() as conn:
@@ -100,7 +216,6 @@ class DatabaseManager:
             return None
         
     def get_user_bankroll(self, user_id: int) -> float:
-        """Busca o saldo atual do usuário."""
         query = "SELECT bankroll FROM users WHERE id = %s;"
         try:
             with self._get_connection() as conn:
@@ -112,7 +227,6 @@ class DatabaseManager:
             return 0.0
 
     def register_bet(self, user_id: int, match_string: str, market: str, odd: float, stake: float, ev: float, ai_justification: str):
-        """Registra a aposta no sistema e desconta o valor da banca do usuário."""
         insert_bet_query = """
             INSERT INTO bets (user_id, match_string, market, odd_taken, stake, expected_ev, ai_justification)
             VALUES (%s, %s, %s, %s, %s, %s, %s);
@@ -123,9 +237,7 @@ class DatabaseManager:
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cursor:
-                    # Registra o bilhete
                     cursor.execute(insert_bet_query, (user_id, match_string, market, odd, stake, ev, ai_justification))
-                    # Desconta a stake da banca (o dinheiro saiu para a casa de apostas)
                     cursor.execute(update_bankroll_query, (stake, user_id))
                 conn.commit()
                 print(f"✅ Aposta registrada! R$ {stake} debitados da banca do usuário {user_id}.")
@@ -133,10 +245,6 @@ class DatabaseManager:
             print(f"❌ Erro ao registrar aposta: {e}")
 
     def resolve_bet(self, bet_id: int, status: str):
-        """
-        Resolve a aposta (WON ou LOST). Se ganhou, devolve a stake + lucro para a banca.
-        status deve ser 'WON' ou 'LOST'.
-        """
         get_bet_query = "SELECT user_id, odd_taken, stake FROM bets WHERE id = %s AND status = 'PENDING';"
         update_bet_query = "UPDATE bets SET status = %s, profit = %s WHERE id = %s;"
         update_bankroll_query = "UPDATE users SET bankroll = bankroll + %s WHERE id = %s;"
@@ -155,17 +263,14 @@ class DatabaseManager:
                     total_return = 0.0
 
                     if status == 'WON':
-                        # Lucro puro = (Stake * Odd) - Stake
                         total_return = float(bet['stake'] * bet['odd_taken'])
                         profit = total_return - float(bet['stake'])
                     elif status == 'LOST':
                         profit = -float(bet['stake'])
-                        total_return = 0.0 # Perdeu tudo
+                        total_return = 0.0
 
-                    # Atualiza o status da aposta
                     cursor.execute(update_bet_query, (status, profit, bet_id))
                     
-                    # Se ganhou, devolve o retorno total para a banca do usuário
                     if status == 'WON':
                         cursor.execute(update_bankroll_query, (total_return, bet['user_id']))
                         
@@ -175,7 +280,6 @@ class DatabaseManager:
             print(f"❌ Erro ao resolver a aposta: {e}")
             
     def get_pending_bets(self):
-        """Busca todas as apostas que ainda não foram resolvidas."""
         query = "SELECT * FROM bets WHERE status = 'PENDING';"
         try:
             with self._get_connection() as conn:
@@ -187,29 +291,16 @@ class DatabaseManager:
             return []
 
     def update_bet_status(self, bet_id: int, status: str, profit: float, user_id: int):
-        """
-        Atualiza o status da aposta e ajusta a banca do usuário em caso de vitória.
-        """
-        # Se ganhou, o lucro é (Stake * Odd) - Stake. 
-        # No 'WON', devolvemos a Stake + o Lucro para a banca.
-        # No 'LOST', o dinheiro já saiu no momento da aposta, então não fazemos nada na banca.
-        
         query_bet = "UPDATE bets SET status = %s, profit = %s WHERE id = %s;"
         query_user = "UPDATE users SET bankroll = bankroll + %s WHERE id = %s;"
         
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cursor:
-                    # 1. Atualiza o bilhete
                     cursor.execute(query_bet, (status, profit, bet_id))
-                    
-                    # 2. Se ganhou, credita o valor total (Stake + Lucro) de volta
                     if status == 'WON':
-                        # Se a aposta foi de 10 e a odd 2.0, o lucro é 10. 
-                        # Devolvemos 20 (stake original que foi tirada + lucro).
                         total_return = profit + self._get_stake_from_bet(bet_id)
                         cursor.execute(query_user, (total_return, user_id))
-                    
                     conn.commit()
                     return True
         except Exception as e:
@@ -217,7 +308,6 @@ class DatabaseManager:
             return False
 
     def _get_stake_from_bet(self, bet_id: int) -> float:
-        """Auxiliar para saber quanto foi a stake original."""
         query = "SELECT stake FROM bets WHERE id = %s;"
         with self._get_connection() as conn:
             with conn.cursor() as cursor:
@@ -226,13 +316,11 @@ class DatabaseManager:
                 return float(res['stake']) if res else 0.0
             
     def get_dashboard_stats(self, user_id: int):
-        """Calcula as métricas de performance do usuário e da IA."""
         query = """
             SELECT 
                 COALESCE(SUM(profit), 0) as total_profit,
                 COUNT(*) FILTER (WHERE status != 'PENDING') as total_resolved,
                 COUNT(*) FILTER (WHERE status = 'WON') as total_wins,
-                -- Cálculo da assertividade global da IA (todos os registros WON vs LOST)
                 (SELECT 
                     CASE 
                         WHEN COUNT(*) FILTER (WHERE status != 'PENDING') = 0 THEN 0
@@ -250,8 +338,6 @@ class DatabaseManager:
                     
                     total_resolved = row['total_resolved']
                     total_wins = row['total_wins']
-                    
-                    # Cálculo do Win Rate do usuário logado
                     win_rate = (total_wins * 100 / total_resolved) if total_resolved > 0 else 0
                     
                     return {
@@ -265,21 +351,11 @@ class DatabaseManager:
             return {"total_profit": 0, "win_rate": 0, "sniper_accuracy": 0, "total_bets": 0}
         
     def get_user_dashboard_metrics(self, user_id: int):
-        """
-        Calcula Lucro Total, Win Rate, Assertividade Global da IA e Volume de apostas.
-        """
         query = """
             SELECT 
-                -- 1. Lucro Total (Apenas de apostas resolvidas)
                 COALESCE(SUM(profit), 0) as total_profit,
-                
-                -- 2. Total de apostas que não estão mais pendentes
                 COUNT(*) FILTER (WHERE status != 'PENDING') as total_resolved,
-                
-                -- 3. Total de vitórias
                 COUNT(*) FILTER (WHERE status = 'WON') as total_wins,
-                
-                -- 4. Assertividade Global do Sniper (Métrica de autoridade do App)
                 (SELECT 
                     CASE 
                         WHEN COUNT(*) FILTER (WHERE status != 'PENDING') = 0 THEN 0
@@ -297,8 +373,6 @@ class DatabaseManager:
                     
                     total_resolved = row['total_resolved']
                     total_wins = row['total_wins']
-                    
-                    # Cálculo do Win Rate individual
                     win_rate = (total_wins * 100 / total_resolved) if total_resolved > 0 else 0
                     
                     return {

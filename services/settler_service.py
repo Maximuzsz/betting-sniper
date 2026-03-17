@@ -44,3 +44,4 @@ class BetSettler:
         # Atualiza no banco: status, profit e soma o lucro à banca do usuário
         self.db.update_bet_status(bet['id'], status, profit, bet['user_id'])
         print(f"🎯 Bet {bet['id']} resolvida como {status}. Profit: R$ {profit}")
+        
