@@ -255,26 +255,147 @@ def get_upcoming_matches(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Retorna a lista de próximos jogos.
-    AGORA LENDO DIRETAMENTE DO BANCO DE DADOS! 🚀
+    Rota MOCKADA: Liga dos Campeões + Taça do Brasil (Quarta Rodada)
     """
     if not date:
+        from datetime import datetime
         date = datetime.now().strftime("%Y-%m-%d")
 
-    # Bate no banco em vez de bater na API externa!
-    matches = db_manager.get_matches_by_date(date)
+    mocked_matches = [
+        # ==========================================
+        # 🏆 UEFA CHAMPIONS LEAGUE (League ID: 2)
+        # ==========================================
+        {
+            "fixture_id": 900001,
+            "date": f"{date}T14:45:00-03:00", 
+            "league_id": 2,
+            "league_name": "UEFA Champions League",
+            "season": 2025,
+            "home_team_id": 228,
+            "home_team_name": "Sporting",
+            "home_team_logo": "https://media.api-sports.io/football/teams/228.png",
+            "away_team_id": 396,
+            "away_team_name": "Bodø/Glimt",
+            "away_team_logo": "https://media.api-sports.io/football/teams/396.png"
+        },
+        {
+            "fixture_id": 900002,
+            "date": f"{date}T17:00:00-03:00",
+            "league_id": 2,
+            "league_name": "UEFA Champions League",
+            "season": 2025,
+            "home_team_id": 49,
+            "home_team_name": "Chelsea",
+            "home_team_logo": "https://media.api-sports.io/football/teams/49.png",
+            "away_team_id": 85,
+            "away_team_name": "PSG",
+            "away_team_logo": "https://media.api-sports.io/football/teams/85.png"
+        },
+        {
+            "fixture_id": 900003,
+            "date": f"{date}T17:00:00-03:00",
+            "league_id": 2,
+            "league_name": "UEFA Champions League",
+            "season": 2025,
+            "home_team_id": 50,
+            "home_team_name": "Manchester City",
+            "home_team_logo": "https://media.api-sports.io/football/teams/50.png",
+            "away_team_id": 541,
+            "away_team_name": "Real Madrid",
+            "away_team_logo": "https://media.api-sports.io/football/teams/541.png"
+        },
+        {
+            "fixture_id": 900004,
+            "date": f"{date}T17:00:00-03:00",
+            "league_id": 2,
+            "league_name": "UEFA Champions League",
+            "season": 2025,
+            "home_team_id": 42,
+            "home_team_name": "Arsenal",
+            "home_team_logo": "https://media.api-sports.io/football/teams/42.png",
+            "away_team_id": 168,
+            "away_team_name": "Leverkusen",
+            "away_team_logo": "https://media.api-sports.io/football/teams/168.png"
+        },
 
-    if not matches:
-        return {
-            "message": f"Nenhum jogo salvo na base para a data {date}.", 
-            "total": 0, 
-            "matches": []
+        # ==========================================
+        # 🇧🇷 COPA DO BRASIL (League ID: 73)
+        # ==========================================
+        {
+            "fixture_id": 900005,
+            "date": f"{date}T19:00:00-03:00",
+            "league_id": 73,
+            "league_name": "Copa do Brasil",
+            "season": 2026,
+            "home_team_id": 7780,
+            "home_team_name": "Nova Iguaçu",
+            "home_team_logo": "https://media.api-sports.io/football/teams/7780.png",
+            "away_team_id": 154,
+            "away_team_name": "Fortaleza",
+            "away_team_logo": "https://media.api-sports.io/football/teams/154.png"
+        },
+        {
+            "fixture_id": 900006,
+            "date": f"{date}T19:30:00-03:00",
+            "league_id": 73,
+            "league_name": "Copa do Brasil",
+            "season": 2026,
+            "home_team_id": 7724,
+            "home_team_name": "São Bernardo",
+            "home_team_logo": "https://media.api-sports.io/football/teams/7724.png",
+            "away_team_id": 133,
+            "away_team_name": "Ceará SC",
+            "away_team_logo": "https://media.api-sports.io/football/teams/133.png"
+        },
+        {
+            "fixture_id": 900007,
+            "date": f"{date}T21:30:00-03:00",
+            "league_id": 73,
+            "league_name": "Copa do Brasil",
+            "season": 2026,
+            "home_team_id": 147,
+            "home_team_name": "Londrina",
+            "home_team_logo": "https://media.api-sports.io/football/teams/147.png",
+            "away_team_id": 148,
+            "away_team_name": "Operário",
+            "away_team_logo": "https://media.api-sports.io/football/teams/148.png"
+        },
+        {
+            "fixture_id": 900008,
+            "date": f"{date}T21:30:00-03:00",
+            "league_id": 73,
+            "league_name": "Copa do Brasil",
+            "season": 2026,
+            "home_team_id": 150,
+            "home_team_name": "Portuguesa",
+            "home_team_logo": "https://media.api-sports.io/football/teams/150.png",
+            "away_team_id": 135,
+            "away_team_name": "Paysandu",
+            "away_team_logo": "https://media.api-sports.io/football/teams/135.png"
+        },
+        {
+            "fixture_id": 900009,
+            "date": f"{date}T21:30:00-03:00",
+            "league_id": 73,
+            "league_name": "Copa do Brasil",
+            "season": 2026,
+            "home_team_id": 119,
+            "home_team_name": "Sport Recife",
+            "home_team_logo": "https://media.api-sports.io/football/teams/119.png",
+            "away_team_id": 11938,
+            "away_team_name": "Athletic",
+            "away_team_logo": "https://media.api-sports.io/football/teams/11938.png"
         }
+    ]
+
+    # Filtro da UI do telemóvel
+    if league_id:
+        mocked_matches = [m for m in mocked_matches if m["league_id"] == league_id]
 
     return {
         "date_searched": date,
-        "total": len(matches),
-        "matches": matches
+        "total": len(mocked_matches),
+        "matches": mocked_matches
     }
     
 @app.post("/bets/")
