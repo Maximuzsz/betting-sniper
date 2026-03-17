@@ -33,10 +33,15 @@ app = FastAPI(title="Betting Sniper API", version="2.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Em desenvolvimento, o "*" libera geral. No SaaS real, você lista os domínios.
+    # Substitua o ["*"] pelas origens exatas. 
+    allow_origins=[
+        "http://localhost:8081", 
+        "http://127.0.0.1:8081",
+        "https://betting-sniper.onrender.com" # A própria API (útil para o Swagger UI)
+    ], 
     allow_credentials=True,
-    allow_methods=["*"], # Libera POST, GET, OPTIONS, etc.
-    allow_headers=["*"], # Libera cabeçalhos como Authorization (JWT)
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 db_manager = DatabaseManager()
