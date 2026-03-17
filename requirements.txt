@@ -17,7 +17,7 @@ requests>=2.32.0
 httpx>=0.27.0
 
 # Inteligência Artificial
-google-generativeai>=0.8.0
+google-genai==0.3.0
 
 # Utilidades
 python-dotenv>=1.0.1
