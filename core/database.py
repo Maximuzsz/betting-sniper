@@ -384,3 +384,31 @@ class DatabaseManager:
         except Exception as e:
             print(f"❌ Erro ao processar dashboard stats: {e}")
             return {"total_profit": 0, "win_rate": 0, "sniper_accuracy": 0, "total_bets": 0}
+        
+    def update_bankroll_manual(self, user_id: int, new_amount: float):
+        query = "UPDATE users SET current_bankroll = %s WHERE id = %s"
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, (new_amount, user_id))
+            conn.commit()
+
+    def get_bet_by_id(self, bet_id: int, user_id: int):
+        query = "SELECT * FROM bets WHERE id = %s AND user_id = %s"
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, (bet_id, user_id))
+                return cursor.fetchone()
+
+    def update_bet_status(self, bet_id: int, user_id: int, status: str, profit: float):
+        query = "UPDATE bets SET status = %s, profit = %s WHERE id = %s AND user_id = %s"
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, (status, profit, bet_id, user_id))
+            conn.commit()
+
+    def add_to_bankroll(self, user_id: int, amount_to_add: float):
+        query = "UPDATE users SET current_bankroll = current_bankroll + %s WHERE id = %s"
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, (amount_to_add, user_id))
+            conn.commit()

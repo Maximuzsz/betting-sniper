@@ -31,7 +31,13 @@ if not os.getenv("GEMINI_API_KEY") or not os.getenv("DATABASE_URL"):
 
 app = FastAPI(title="Betting Sniper API", version="2.0")
 
+class BankrollUpdate(BaseModel):
+    new_amount: float
 
+class BetResolve(BaseModel):
+    status: str # 'WON', 'LOST' ou 'CASHOUT'
+    cashout_value: Optional[float] = None
+    
 app.add_middleware(
     CORSMiddleware,
     # Substitua o ["*"] pelas origens exatas. 
@@ -513,3 +519,71 @@ def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     stats["current_bankroll"] = db_manager.get_user_bankroll(current_user['id'])
     
     return stats
+
+@app.put("/bankroll")
+def update_manual_bankroll(req: BankrollUpdate, current_user: dict = Depends(get_current_user)):
+    """Atualiza o valor da banca do usuário manualmente."""
+    user_id = current_user['id']
+    
+    try:
+        # Chama a função no banco de dados para forçar o novo valor
+        db_manager.update_bankroll_manual(user_id, req.new_amount)
+        return {"message": "Banca atualizada com sucesso!", "new_bankroll": req.new_amount}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao atualizar banca: {str(e)}")
+
+@app.put("/bets/{bet_id}/resolve")
+def resolve_bet_manual(bet_id: int, req: BetResolve, current_user: dict = Depends(get_current_user)):
+    """Resolve uma aposta manualmente (Green, Red ou Cashout) e ajusta a banca."""
+    user_id = current_user['id']
+    
+    try:
+        # Busca os detalhes da aposta para fazer a matemática
+        # (Presumimos que a stake já foi descontada da banca no momento da aposta)
+        bet = db_manager.get_bet_by_id(bet_id, user_id)
+        
+        if not bet:
+            raise HTTPException(status_code=404, detail="Aposta não encontrada.")
+        
+        if bet['status'] != 'PENDING':
+            raise HTTPException(status_code=400, detail="Esta aposta já foi resolvida.")
+
+        stake = float(bet['stake'])
+        odd = float(bet['odd_taken'])
+        
+        profit = 0.0
+        return_to_bankroll = 0.0
+        
+        if req.status == 'WON':
+            return_to_bankroll = stake * odd
+            profit = return_to_bankroll - stake
+        elif req.status == 'LOST':
+            return_to_bankroll = 0.0
+            profit = -stake
+        elif req.status == 'CASHOUT':
+            if req.cashout_value is None:
+                raise HTTPException(status_code=400, detail="Valor de cashout é obrigatório.")
+            return_to_bankroll = req.cashout_value
+            profit = req.cashout_value - stake
+        else:
+            raise HTTPException(status_code=400, detail="Status inválido.")
+
+        # Atualiza o status e o lucro da aposta no banco
+        db_manager.update_bet_status(bet_id, user_id, req.status, profit)
+        
+        # Devolve o dinheiro para a banca (se houver retorno)
+        if return_to_bankroll > 0:
+            db_manager.add_to_bankroll(user_id, return_to_bankroll)
+            
+        new_bankroll = db_manager.get_user_bankroll(user_id)
+            
+        return {
+            "message": f"Aposta atualizada para {req.status}!",
+            "profit_registered": profit,
+            "new_bankroll": new_bankroll
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
