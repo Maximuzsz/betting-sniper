@@ -64,20 +64,29 @@ class StatsService:
         endpoint = f"{self.base_url}/fixtures"
         
         # Parâmetros base da busca
-        params = {"date": date_str}
+        params = {
+            "date": date_str,
+            "timezone": "America/Sao_Paulo" # <-- Garante que a data bata com o Brasil!
+        }
         
-        # Filtros opcionais para não gastar muita banda/cota puxando ligas irrelevantes
         if league_id:
             params["league"] = league_id
         if season:
             params["season"] = season
 
         try:
-            response = requests.get(endpoint, headers=self.headers, params=params, timeout=10)
+            # Aumentamos o timeout para 15s pois buscar o mundo todo exige mais do servidor
+            response = requests.get(endpoint, headers=self.headers, params=params, timeout=15)
             response.raise_for_status()
             data = response.json()
 
+            # 🚨 O DETETIVE DE ERROS 🚨
+            # Se a API reclamar de cota estourada ou chave inválida, vai aparecer no log do Render
+            if data.get('errors'):
+                print(f"⚠️ ALERTA API-SPORTS: {data.get('errors')}")
+
             if not data.get('response'):
+                print(f"ℹ️ Nenhum jogo retornado pela API para a data {date_str}.")
                 return []
 
             fixtures = data['response']
@@ -88,7 +97,7 @@ class StatsService:
                 teams = item['teams']
                 league = item['league']
                 
-                # Vamos filtrar apenas jogos que não começaram (NS - Not Started) ou estão prestes a começar
+                # Vamos filtrar apenas jogos que não começaram (NS ou TBD)
                 if fixture['status']['short'] in ['NS', 'TBD']:
                     upcoming.append({
                         "fixture_id": fixture['id'],
@@ -98,13 +107,15 @@ class StatsService:
                         "season": league['season'],
                         "home_team_id": teams['home']['id'],
                         "home_team_name": teams['home']['name'],
-                        "home_team_logo": teams['home']['logo'], # Pra ficar bonito no Flutter!
+                        "home_team_logo": teams['home']['logo'],
                         "away_team_id": teams['away']['id'],
                         "away_team_name": teams['away']['name'],
                         "away_team_logo": teams['away']['logo']
                     })
                     
-            return upcoming
+            # Dica Sênior: Se você não filtrou por liga, a API traz milhares de jogos. 
+            # Limitamos aos primeiros 30 para o celular não engasgar renderizando tudo de uma vez.
+            return upcoming[:30] if not league_id else upcoming
 
         except requests.exceptions.RequestException as e:
             print(f"❌ Erro ao buscar próximos jogos: {str(e)}")
