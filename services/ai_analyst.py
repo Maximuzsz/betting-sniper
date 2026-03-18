@@ -46,6 +46,8 @@ class AIAnalyst:
             "prob_home_ajustada": 0.0,
             "prob_draw_ajustada": 0.0,
             "prob_away_ajustada": 0.0,
+            "prob_over_25_ajustada": 0.0,
+            "prob_under_25_ajustada": 0.0,
             "tendencia_gols": "Over 2.5" | "Under 2.5" | "Neutra",
             "confianca_analise": 0.0,
             "justificativa_sniper": "Sua explicação técnica rigorosamente em pt-BR."

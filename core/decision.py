@@ -43,23 +43,23 @@ class DecisionEngine:
         return round(bankroll * final_pct, 2)
 
     def evaluate_market(self, ai_adjusted_probs: Dict[str, Any], market_odds: Dict[str, float], bankroll: float) -> Dict[str, Any]:
-        """
-        Varre o mercado 1X2 (Casa, Empate, Fora) e decide onde (e se) o Sniper deve atirar.
-        """
         decisions: List[Dict[str, Any]] = []
         
-        # Mapeamento para cruzar o JSON da IA com as Odds do Mercado
+        # Agora mapeamos os 5 mercados!
         market_map = {
             'home': 'prob_home_ajustada',
             'draw': 'prob_draw_ajustada',
-            'away': 'prob_away_ajustada'
+            'away': 'prob_away_ajustada',
+            'over_2.5': 'prob_over_25_ajustada',
+            'under_2.5': 'prob_under_25_ajustada'
         }
         
-        # --- NOVO: TRADUTOR DE MERCADOS ---
         tradutor_mercado = {
             'home': 'VITÓRIA MANDANTE (1)',
             'draw': 'EMPATE (X)',
-            'away': 'VITÓRIA VISITANTE (2)'
+            'away': 'VITÓRIA VISITANTE (2)',
+            'over_2.5': 'MAIS DE 2.5 GOLS (OVER)',
+            'under_2.5': 'MENOS DE 2.5 GOLS (UNDER)'
         }
         
         for market, ai_key in market_map.items():
@@ -70,24 +70,30 @@ class DecisionEngine:
                 continue
                 
             ev = self._calculate_ev(prob_ia, odd)
+            confianca = ai_adjusted_probs.get('confianca_analise', 1.0)
             
-            # O Gatilho: Se a IA está confiante e a matemática aprova, nós atiramos.
-            confianca = ai_adjusted_probs.get('confianca_analise', 1.0) # Assume 1.0 se a IA não retornar esse campo
+            # Avalia se a entrada passa no nosso crivo de valor
             if ev >= self.min_ev and confianca >= 0.7:
                 stake = self._calculate_kelly_stake(prob_ia, odd, bankroll)
                 
-                # Só adiciona a recomendação se a stake sugerida for maior que zero
                 if stake > 0:
                     decisions.append({
-                        "mercado": tradutor_mercado[market], # <--- Aplica a tradução para PT-BR aqui
+                        "mercado": tradutor_mercado[market],
                         "odd_oferecida": odd,
                         "probabilidade_sniper": round(prob_ia * 100, 2),
                         "ev_esperado_pct": round(ev * 100, 2),
                         "stake_recomendada_R$": stake,
-                        "justificativa": ai_adjusted_probs.get('justificativa_sniper', 'Análise de valor matemático aprovada.')
+                        "justificativa": ai_adjusted_probs.get('justificativa_sniper', 'Valor matemático encontrado.')
                     })
-                
+        
+        # --- A GRANDE SACADA SÊNIOR ---
+        # Ordena a lista de decisões do MAIOR EV para o MENOR
+        decisions.sort(key=lambda x: x["ev_esperado_pct"], reverse=True)
+        
+        # Pega apenas a melhor opção absoluta (a posição [0] da lista)
+        melhor_decisao = [decisions[0]] if len(decisions) > 0 else []
+
         return {
-            "aprovado": len(decisions) > 0,
-            "entradas_recomendadas": decisions
+            "aprovado": len(melhor_decisao) > 0,
+            "entradas_recomendadas": melhor_decisao
         }
