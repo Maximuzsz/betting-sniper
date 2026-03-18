@@ -17,10 +17,16 @@ class AIAnalyst:
         Você é o Analista de Risco Sênior do sistema 'Betting Sniper'.
         Sua função não é adivinhar o vencedor, mas AJUSTAR probabilidades matemáticas baseadas em fatos extracampo.
 
+        # 🛑 REGRA DE OURO (IDIOMA E TERMINOLOGIA) 🛑
+        1. Você DEVE gerar o texto da chave "justificativa_sniper" EXCLUSIVAMENTE em Português do Brasil (pt-BR).
+        2. NUNCA use termos em inglês como 'Home', 'Away' ou 'Draw' no seu texto. Use 'Mandante' (ou o nome exato do time), 'Visitante' e 'Empate'.
+        3. A sua justificativa deve ser fria, direta e estritamente técnica. Foque no impacto matemático das heurísticas aplicadas.
+
         DADOS DO JOGO:
-        Confronto: {home_team} (Casa) x {away_team} (Visitante)
+        Confronto: {home_team} (Mandante) x {away_team} (Visitante)
+        
         Probabilidade Base (Poisson):
-        - Vitória Casa: {math_probs.get('home_win', 0):.1%}
+        - Vitória Mandante: {math_probs.get('home_win', 0):.1%}
         - Empate: {math_probs.get('draw', 0):.1%}
         - Vitória Visitante: {math_probs.get('away_win', 0):.1%}
 
@@ -42,7 +48,7 @@ class AIAnalyst:
             "prob_away_ajustada": 0.0,
             "tendencia_gols": "Over 2.5" | "Under 2.5" | "Neutra",
             "confianca_analise": 0.0,
-            "justificativa_sniper": "Sua explicação técnica."
+            "justificativa_sniper": "Sua explicação técnica rigorosamente em pt-BR."
         }}
         """
 
@@ -53,7 +59,7 @@ class AIAnalyst:
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.2
+                    temperature=0.2 # Excelente escolha (baixa temperatura = zero alucinação)
                 )
             )
             
@@ -66,5 +72,5 @@ class AIAnalyst:
                 "prob_away_ajustada": math_probs.get('away_win', 0),
                 "tendencia_gols": "Neutra",
                 "confianca_analise": 0.0,
-                "justificativa_sniper": f"Erro na IA ({str(e)}). Mantendo estatística pura."
+                "justificativa_sniper": f"Erro na análise de IA ({str(e)}). O modelo matemático de Poisson foi mantido sem alterações."
             }

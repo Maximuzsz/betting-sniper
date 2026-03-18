@@ -41,6 +41,7 @@ class DecisionEngine:
         final_pct = min(safe_kelly_pct, max_risk_pct)
         
         return round(bankroll * final_pct, 2)
+
     def evaluate_market(self, ai_adjusted_probs: Dict[str, Any], market_odds: Dict[str, float], bankroll: float) -> Dict[str, Any]:
         """
         Varre o mercado 1X2 (Casa, Empate, Fora) e decide onde (e se) o Sniper deve atirar.
@@ -54,6 +55,13 @@ class DecisionEngine:
             'away': 'prob_away_ajustada'
         }
         
+        # --- NOVO: TRADUTOR DE MERCADOS ---
+        tradutor_mercado = {
+            'home': 'VITÓRIA MANDANTE (1)',
+            'draw': 'EMPATE (X)',
+            'away': 'VITÓRIA VISITANTE (2)'
+        }
+        
         for market, ai_key in market_map.items():
             prob_ia = ai_adjusted_probs.get(ai_key, 0.0)
             odd = market_odds.get(market, 0.0)
@@ -64,18 +72,20 @@ class DecisionEngine:
             ev = self._calculate_ev(prob_ia, odd)
             
             # O Gatilho: Se a IA está confiante e a matemática aprova, nós atiramos.
-            confianca = ai_adjusted_probs.get('confianca_analise', 0.0)
+            confianca = ai_adjusted_probs.get('confianca_analise', 1.0) # Assume 1.0 se a IA não retornar esse campo
             if ev >= self.min_ev and confianca >= 0.7:
                 stake = self._calculate_kelly_stake(prob_ia, odd, bankroll)
                 
-                decisions.append({
-                    "mercado": market.upper(),
-                    "odd_oferecida": odd,
-                    "probabilidade_sniper": round(prob_ia * 100, 2),
-                    "ev_esperado_pct": round(ev * 100, 2),
-                    "stake_recomendada_R$": stake,
-                    "justificativa": ai_adjusted_probs.get('justificativa_sniper', 'Sem justificativa')
-                })
+                # Só adiciona a recomendação se a stake sugerida for maior que zero
+                if stake > 0:
+                    decisions.append({
+                        "mercado": tradutor_mercado[market], # <--- Aplica a tradução para PT-BR aqui
+                        "odd_oferecida": odd,
+                        "probabilidade_sniper": round(prob_ia * 100, 2),
+                        "ev_esperado_pct": round(ev * 100, 2),
+                        "stake_recomendada_R$": stake,
+                        "justificativa": ai_adjusted_probs.get('justificativa_sniper', 'Análise de valor matemático aprovada.')
+                    })
                 
         return {
             "aprovado": len(decisions) > 0,
