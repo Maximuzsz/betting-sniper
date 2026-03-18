@@ -18,6 +18,7 @@ from core.decision import DecisionEngine
 from core.database import DatabaseManager
 from services.stats_service import StatsService
 from services.settler_service import BetSettler
+from services.odds_service import OddsService
 
 # Importando o módulo de segurança que criamos
 from core.security import verify_password, get_password_hash, create_access_token
@@ -72,6 +73,7 @@ math_engine = PoissonEngine()
 ai_analyst = AIAnalyst(api_key=os.getenv("GEMINI_API_KEY"))
 decision_engine = DecisionEngine(kelly_fraction=0.25, min_ev=0.05)
 stats_service = StatsService(api_key=os.getenv("API_SPORTS_KEY"))
+odds_service = OddsService(api_key=os.getenv("ODDS_API_KEY"))
 
 # --- CONFIGURAÇÃO DE SEGURANÇA (O Cadeado) ---
 # Diz ao FastAPI que a rota para pegar o token se chama "/login"
@@ -212,7 +214,7 @@ def get_bankroll(current_user: dict = Depends(get_current_user)):
 
 @app.post("/sniper/analyze")
 def analyze_match(req: MatchAnalysisRequest, current_user: dict = Depends(get_current_user)):
-    """O Coração do Sniper com Busca Automática de Estatísticas e Cache."""
+    """O Coração do Sniper com Busca Automática de Estatísticas, Cache e Odds Reais."""
     
     bankroll = db_manager.get_user_bankroll(current_user['id'])
     if bankroll <= 0:
@@ -228,22 +230,20 @@ def analyze_match(req: MatchAnalysisRequest, current_user: dict = Depends(get_cu
         api_stats = stats_service.fetch_team_season_stats(req.league_id, req.season, team_id)
         
         if not api_stats:
-            # Em vez de dar erro 500, usamos um valor padrão para o Sniper não parar
-            # Isso é o que chamamos de 'Graceful Degradation'
+            # Graceful Degradation: Não para o app, assume médias.
             print(f"⚠️ Usando xG padrão para o time {team_id} devido a limitação da API.")
-            return 1.2 if is_home else 0.8 # Valores genéricos médios
+            return 1.2 if is_home else 0.8
             
         db_manager.upsert_team_stats(team_id, req.league_id, req.season, api_stats['home_xg'], api_stats['away_xg'])
         return api_stats['home_xg'] if is_home else api_stats['away_xg']
 
-    # Puxa o xG de cada time usando a nossa lógica inteligente
+    # Puxa o xG de cada time
     home_xg = get_team_xg(req.home_team_id, is_home=True)
     away_xg = get_team_xg(req.away_team_id, is_home=False)
 
-
     # --- 2. O FLUXO DE ANÁLISE ---
     
-    # Matemática Pura (Agora com dados 100% reais!)
+    # Matemática Pura
     math_probs = math_engine.calculate_probabilities(home_xg, away_xg)
     
     # Notícias de desfalques
@@ -254,8 +254,18 @@ def analyze_match(req: MatchAnalysisRequest, current_user: dict = Depends(get_cu
         req.home_team_name, req.away_team_name, math_probs, news_context
     )
     
-    # Decisão Financeira
-    market_odds = {"home": req.odds_home, "draw": req.odds_draw, "away": req.odds_away}
+    # --- 3. INTEGRAÇÃO DE ODDS REAIS ---
+    print(f"🔎 Buscando Odds Reais para {req.home_team_name} x {req.away_team_name}...")
+    real_odds = odds_service.fetch_real_odds(req.league_id, req.home_team_name, req.away_team_name)
+    
+    if real_odds:
+        print(f"✅ Odds reais encontradas no mercado: {real_odds}")
+        market_odds = real_odds
+    else:
+        print("⚠️ Sem odds abertas. Usando odds de fallback do App.")
+        market_odds = {"home": req.odds_home, "draw": req.odds_draw, "away": req.odds_away}
+
+    # Decisão Financeira (EV real contra a casa de apostas)
     decision = decision_engine.evaluate_market(ai_result, market_odds, bankroll)
 
     return {
@@ -265,7 +275,8 @@ def analyze_match(req: MatchAnalysisRequest, current_user: dict = Depends(get_cu
             "away_xg": away_xg
         },
         "analyst_verdict": ai_result,
-        "financial_decision": decision
+        "financial_decision": decision,
+        "real_odds_used": real_odds is not None
     }
 
 # --- ROTA DE INJEÇÃO MANUAL (BACKDOOR) ---
