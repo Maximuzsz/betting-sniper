@@ -412,3 +412,46 @@ class DatabaseManager:
             with conn.cursor() as cursor:
                 cursor.execute(query, (amount_to_add, user_id))
             conn.commit()
+            
+    def upsert_manual_matches(self, matches: list):
+        """Salva ou atualiza os jogos enviados via JSON."""
+        # ON CONFLICT exige que fixture_id seja uma chave primária (PRIMARY KEY) ou UNIQUE na tabela
+        query = """
+            INSERT INTO upcoming_matches 
+            (fixture_id, league_id, league_name, season, match_date, home_team_id, home_team_name, away_team_id, away_team_name)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (fixture_id) DO UPDATE SET
+                match_date = EXCLUDED.match_date,
+                home_team_name = EXCLUDED.home_team_name,
+                away_team_name = EXCLUDED.away_team_name;
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                for m in matches:
+                    cursor.execute(query, (
+                        m.fixture_id, m.league_id, m.league_name, m.season, 
+                        m.date, m.home_team_id, m.home_team_name, 
+                        m.away_team_id, m.away_team_name
+                    ))
+            conn.commit()
+
+    def get_manual_matches_by_date(self, date_str: str):
+        """Busca os jogos salvos localmente para uma data específica."""
+        # Busca usando um LIKE para pegar qualquer horário daquele dia (ex: 2026-03-18%)
+        query = """
+            SELECT fixture_id, league_id, league_name, season, match_date as date, 
+                   home_team_id, home_team_name, away_team_id, away_team_name
+            FROM upcoming_matches
+            WHERE CAST(match_date AS TEXT) LIKE %s
+            ORDER BY match_date ASC;
+        """
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, (f"{date_str}%",))
+                results = cursor.fetchall()
+                
+                # Formata a data para ISO String para o React Native não reclamar
+                for r in results:
+                    if hasattr(r['date'], 'isoformat'):
+                        r['date'] = r['date'].isoformat()
+                return results
