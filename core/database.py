@@ -72,16 +72,14 @@ class DatabaseManager:
         query_matches = """
         CREATE TABLE IF NOT EXISTS upcoming_matches (
             fixture_id BIGINT PRIMARY KEY,
-            date TIMESTAMP WITH TIME ZONE,
             league_id INT,
             league_name VARCHAR(255),
             season INT,
+            match_date TIMESTAMP,
             home_team_id INT,
             home_team_name VARCHAR(255),
-            home_team_logo VARCHAR(255),
             away_team_id INT,
-            away_team_name VARCHAR(255),
-            away_team_logo VARCHAR(255)
+            away_team_name VARCHAR(255)
         );
         """
 
